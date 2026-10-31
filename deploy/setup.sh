@@ -207,7 +207,7 @@ wait_keycloak() {  # Keycloak answers its master realm and a token call; started
   $P --env-file "$DESKS_STATE/desks.env" up -d --wait keycloak-db keycloak edge >/dev/null 2>&1 || true   # no gateway: no preflight needed
   for i in $(seq 1 60); do
     curl -sf -o /dev/null --cacert "$T/ca.crt" https://127.0.0.1:8443/realms/master 2>/dev/null \
-      && python3 keycloak/apply_realm.py enclave-subject >/dev/null 2>&1 && return 0
+      && python3 -c 'import sys; sys.path.insert(0, "keycloak"); import apply_realm as a; a.Api()' >/dev/null 2>&1 && return 0   # a token, not only a page
     sleep 5
   done
   die "Keycloak did not answer in 5 minutes; see: journalctl -u ekka-desks, sudo ./setup.sh compose logs keycloak"
