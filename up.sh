@@ -256,9 +256,14 @@ $(grep -E '^[[:space:]]*[*]?[[:space:]]*[a-z0-9-]+[[:space:]]' <<<"$orgs" | sed 
   ekka_in org list 2>&1 | grep -qE "^[[:space:]]*[*][[:space:]]*$EKKA_ORG[[:space:]]" \
     || die "the current organization is not $EKKA_ORG after switching; nothing was created"
   ok "organization: $EKKA_ORG"
-  local id
-  id=$(ekka_in enclave create --name "desks $(hostname -s)" 2>&1 | grep -o -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-  [[ -n $id ]] || die "ekka enclave create gave no id; run it by hand to see why"
+  # The output is kept BEFORE the id is looked for, so a refusal reaches the person: with `set -e`, a pipeline
+  # whose grep finds nothing stopped this script with exit 1 and no message at all (an organization with no
+  # Enclave slot left, measured 2026-10-31). EKKA's own sentence is what the person needs.
+  local created id create_rc=0
+  created=$(ekka_in enclave create --name "desks $(hostname -s)" 2>&1) || create_rc=$?
+  (( create_rc == 0 )) || die "EKKA did not create an Enclave: $created"
+  id=$(grep -o -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$created" | head -1 || true)
+  [[ -n $id ]] || die "EKKA did not create an Enclave: $(grep -v -E '^\s*$|Container |Network |Volume ' <<<"$created" | head -4 | tr '\n' ' ')"
   ok "Enclave $id created"
   # The first start claims this machine, keeps the vault key in a file (no keychain in a container), then keeps
   # running; it is stopped once claimed, and `compose up` runs it for good from then on.
