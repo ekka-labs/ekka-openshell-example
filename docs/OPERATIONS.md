@@ -40,8 +40,8 @@ The rest of the stack is `ekka-desks.service`: compose in the foreground, from a
 `tools/` under `/usr/local/lib/ekka-desks` (never a person's checkout), **bound to the Enclave**. Starting the Enclave
 starts the stack; stopping or losing the Enclave stops it. Before the gateway starts, the unit connects to the Enclave's
 interceptor socket and waits up to a minute for an answer, so a gateway never runs without the Enclave that checks its
-calls. A container that exits ends the unit, and systemd starts it again (`Restart=on-failure`); compose itself restarts
-nothing (`restart: "no"` everywhere).
+calls. A container that exits, cleanly or not, ends the unit, and systemd starts it again (`Restart=always`); compose itself
+restarts nothing (`restart: "no"` everywhere). Only `systemctl stop` means stop, and only `systemctl mask` keeps it stopped.
 
 After a reboot or any doubt:
 
@@ -52,11 +52,13 @@ sudo journalctl -u ekka -n 50
 sudo journalctl -u ekka-desks -n 50
 ```
 
-Maintenance: `sudo systemctl stop ekka-desks` stops the stack and leaves the Enclave running; `sudo systemctl stop ekka`
-stops both. Start with `sudo systemctl start ekka` (the stack follows). An upgrade is the original
+Maintenance: `sudo systemctl stop ekka-desks` stops the stack and leaves the Enclave running until the Enclave is next
+started or restarted, which pulls the stack back in; to keep the stack stopped across that and across reboots,
+`sudo systemctl mask --now ekka-desks`, and `sudo systemctl unmask ekka-desks && sudo systemctl start ekka-desks` to resume.
+`sudo systemctl stop ekka` stops both. Start with `sudo systemctl start ekka` (the stack follows). An upgrade is the original
 `sudo EKKA_VERSION=<release> ./up.sh server <name>` command: it installs the release through EKKA's signed installer,
 keeps the previous binary beside it, regenerates the units and restarts them. Rollback is the same command with the older
-release and the installer's own `--allow-downgrade` step, as it prints.
+release and `EKKA_ALLOW_DOWNGRADE=1` added, the one way the installer accepts an older release.
 
 Running the Enclave on this machine's network, as a service, means it is not inside a container: the unit's protections
 decide what it can read and reach, and Docker's default seccomp profile does not apply to it. What is gained over the
@@ -312,7 +314,7 @@ Receipts and exports may include a requester's name or email when supplied at di
 
 ## When EKKA's cloud is unreachable
 
-Every desk change normally goes through EKKA: `ekka desk stop`, `ekka desk start` and the rest. If EKKA's cloud cannot be reached and a desk must stop now, stop it on the server. Nothing below needs EKKA. First stop the gateway repair timer, so it does not undo a stop ([Server loopback and restart recovery](#server-loopback-and-restart-recovery)).
+Every desk change normally goes through EKKA: `ekka desk stop`, `ekka desk start` and the rest. If EKKA's cloud cannot be reached and a desk must stop now, stop it on the server. Nothing below needs EKKA.
 
 **One desk.** The sign-in service and the gateway on the server must be running.
 
@@ -322,10 +324,12 @@ sudo ./up.sh openshell sandbox stop <desk>    # always name the desk: with no na
 
 The desk stays stopped until someone starts it again.
 
-**Every desk at once.** Stop the gateway. It stops each running desk before it exits, and it stays stopped, even after a reboot, until you start it.
+**Every desk at once.** Stop the stack's unit and keep it stopped. The gateway stops each running desk before it exits; the
+stack (sign-in included) stays down, even after a reboot or an Enclave restart, until you unmask it. Stopping the gateway
+container by hand does not work here: the unit would start the stack again.
 
 ```sh
-sudo docker stop -t 120 ekka-desks-gateway-1                         # up to 2 minutes to stop every desk first
+sudo systemctl mask --now ekka-desks                                  # up to 90 s: the gateway stops every desk first
 sudo docker ps --filter label=openshell.ai/managed-by=openshell       # should list nothing
 ```
 
@@ -337,7 +341,7 @@ sudo docker stop $(sudo docker ps -q --filter label=openshell.ai/managed-by=open
 
 To stop only one desk's containers this way, add `--filter label=openshell.ai/sandbox-name=<desk>`.
 
-When EKKA is back, start the gateway: `sudo docker start ekka-desks-gateway-1`. It starts again every desk that was running when you stopped it. A desk you stopped with `sandbox stop` stays stopped.
+When EKKA is back: `sudo systemctl unmask ekka-desks && sudo systemctl start ekka-desks`. The gateway starts again every desk that was running when you stopped it. A desk you stopped with `sandbox stop` stays stopped.
 
 ## Remove the server's desks
 

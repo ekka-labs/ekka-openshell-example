@@ -5,6 +5,9 @@
 Wants=ekka-desks.service
 
 [Service]
+# The BASE home, whatever the generator wrote: it writes the environment's state folder (home/staging for staging), and
+# the daemon adds the environment itself, so without this a non-prod service would look in home/staging/staging.
+Environment=EKKA_HOME=@@ENCLAVE_HOME@@
 Environment=EKKA_ENV=@@EKKA_ENV@@
 # The interceptor socket is 0660 of this group; NVIDIA's gateway joins the same group (compose group_add).
 SupplementaryGroups=openshell

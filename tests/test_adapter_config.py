@@ -143,7 +143,8 @@ class UpSh(unittest.TestCase):
 
     def test_only_the_three_lines_leave_the_enclaves_container(self):
         m = re.search(r"^write_adapter_config\(\) \{.*?^\}\n", self.text, re.S | re.M)
-        self.assertIn('grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$ENCLAVE_HOME/$(env_dir)/enclave.env"', m.group(0))
+        self.assertIn('enclave_home_read "$(env_dir)/enclave.env" | grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)="', m.group(0))
+        self.assertNotIn('"$ENCLAVE_HOME/', m.group(0), "read as the Enclave's user, never root through its folder")
         self.assertNotRegex(m.group(0), r"\bcat\b", "never the whole file: it holds the node's secret")
 
     def test_the_step_waits_for_the_adapter_and_runs_after_the_gateway_setup(self):

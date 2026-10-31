@@ -190,11 +190,9 @@ EOF
   # top of the Enclave's home; every other environment in a folder named after it. Written whole, as the Enclave's
   # user, 0600: the daemon reads this file directly and refuses one another user owns.
   local envdir=$env; [[ $env == prod ]] && envdir=.
-  local F=$ENCLAVE_HOME/$envdir/enclave.env
-  [[ -f $F ]] || { rm -f "$f"; die "no enclave.env for $env at $F: enroll first"; }
-  [[ -L $F ]] && { rm -f "$f"; die "$F is a link; the Enclave keeps a real file there"; }
-  cp -p "$F" "$F.before-desks"
-  { grep -v -E '^EKKA_OPENSHELL_' "$F.before-desks"; cat "$f"; } | enclave_home_file "$envdir/enclave.env" 0600
+  local before; before=$(enclave_home_read "$envdir/enclave.env") || { rm -f "$f"; die "no enclave.env for $env in the Enclave's home: enroll first"; }
+  printf '%s\n' "$before" | enclave_home_file "$envdir/enclave.env.before-desks" 0600   # the old file kept, as the Enclave's user
+  { grep -v -E '^EKKA_OPENSHELL_' <<<"$before"; cat "$f"; } | enclave_home_file "$envdir/enclave.env" 0600
   rm -f "$f"
   say "enclave.env ($env): the OpenShell keys written, issuer mode; the old file kept as enclave.env.before-desks"
 }

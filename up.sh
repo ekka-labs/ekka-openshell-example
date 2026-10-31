@@ -251,8 +251,10 @@ step_enclave_install() {  # the signed EKKA release on this machine, through EKK
     [[ -n $have ]] && cp -p /usr/local/bin/ekka "/usr/local/bin/ekka.before-$have"
     # A controlled PATH so nothing shadows /usr/local/bin (the wrapper lives in /usr/local/sbin, not on this PATH); the
     # signature check is never skipped: a refusal here is the installer's own sentence.
-    env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root EKKA_VERSION="$want" EKKA_INSTALL_DIR=/usr/local/bin sh "$t/install.sh" >"$DESKS_STATE/ekka-install.log" 2>&1 \
-      || { rm -rf "$t"; die "EKKA $want did not install; see $DESKS_STATE/ekka-install.log (a rollback is explicit: EKKA_VERSION=<older> plus the installer's --allow-downgrade)"; }
+    # EKKA_ALLOW_DOWNGRADE=1 on the up.sh command is the ONE way to roll back: the installer refuses an older release otherwise.
+    local -a downgrade=(); [[ ${EKKA_ALLOW_DOWNGRADE:-} == 1 ]] && downgrade=(--allow-downgrade)
+    env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root EKKA_VERSION="$want" EKKA_INSTALL_DIR=/usr/local/bin sh "$t/install.sh" "${downgrade[@]}" >"$DESKS_STATE/ekka-install.log" 2>&1 \
+      || { rm -rf "$t"; die "EKKA $want did not install; see $DESKS_STATE/ekka-install.log (an older release needs EKKA_ALLOW_DOWNGRADE=1 on this command)"; }
     rm -rf "$t"
     [[ $(/usr/local/bin/ekka --version 2>/dev/null | head -1 | awk '{print $2}') == "$want" ]] || die "/usr/local/bin/ekka is not $want after the install"
     ok "ekka $want installed (signature checked by EKKA's installer)${have:+; the previous binary is /usr/local/bin/ekka.before-$have}"
@@ -320,11 +322,23 @@ $(grep -E '^[[:space:]]*[*]?[[:space:]]*[a-z0-9-]+[[:space:]]' <<<"$orgs" | sed 
   [[ -n $id ]] || die "ekka enclave create gave no id; run it by hand to see why"
   ok "Enclave $id created"
   # The first start claims this machine, keeps the vault key in a file (a server has no keychain), then keeps
-  # running; it is stopped once claimed, and the systemd unit runs it for good from then on (step_start).
-  ekka_in enclave start "$id" --custody file >"$DESKS_STATE/enclave-claim.log" 2>&1 & local pid=$!
-  for _ in $(seq 1 60); do
-    enrolled 2>/dev/null && break; sleep 2; done
-  kill -INT "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true   # stopped, not killed: a killed Enclave leaves its lock behind
+  # running. It runs as a TRANSIENT systemd unit, as the Enclave's user, so it has a managed lifecycle: stopped by
+  # name with a deadline once claimed, never a backgrounded shell signalled through a wrapper (Codex review of #4,
+  # reproduced hang). Its output is in the journal. The permanent unit runs it for good from then on (step_start).
+  systemctl stop ekka-enroll.service >/dev/null 2>&1 || true; systemctl reset-failed ekka-enroll.service >/dev/null 2>&1 || true
+  systemd-run --unit=ekka-enroll --uid=ekka --gid=ekka -p TimeoutStopSec=30 -p KillMode=mixed \
+    --setenv=PATH=/usr/local/bin:/usr/bin:/bin --setenv=HOME=/var/lib/ekka --setenv=EKKA_HOME="$ENCLAVE_HOME" --setenv=EKKA_ENV="$env" \
+    /usr/local/bin/ekka enclave start "$id" --custody file >/dev/null 2>&1 \
+    || die "the claim could not be started as a transient unit; see: journalctl -u ekka-enroll"
+  local i; for i in $(seq 1 60); do
+    enrolled 2>/dev/null && break
+    systemctl is-active --quiet ekka-enroll.service || break   # it exited: the journal says why
+    sleep 2; done
+  journalctl -u ekka-enroll.service --no-pager -o cat >"$DESKS_STATE/enclave-claim.log" 2>/dev/null || true
+  systemctl stop ekka-enroll.service >/dev/null 2>&1 || true   # SIGINT then SIGKILL after TimeoutStopSec; the lock is released either way
+  for i in $(seq 1 40); do systemctl is-active --quiet ekka-enroll.service || break; sleep 1; done
+  systemctl is-active --quiet ekka-enroll.service && die "the claim process did not stop within 40 s; nothing else was started. See: systemctl status ekka-enroll"
+  systemctl reset-failed ekka-enroll.service >/dev/null 2>&1 || true
   enrolled || die "the Enclave did not finish enrolling; see $DESKS_STATE/enclave-claim.log"
   ok "this machine is claimed by Enclave $id (vault key kept in a file)"
   # A new Enclave (a first install, or after `ekka enclave reset`) has none of what three marks say the old one had:
@@ -476,7 +490,7 @@ admin_setup() {
 # Enclave's organization, node and Govern URL lines leave its container; enclave.env holds a secret too, and that
 # line never does. The file holds no credential, and compose mounts it read-only into the adapter (ADK-E1).
 write_adapter_config() {
-  grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$ENCLAVE_HOME/$(env_dir)/enclave.env" \
+  enclave_home_read "$(env_dir)/enclave.env" | grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" \
     | python3 tools/adapter_config.py write "$DESKS_STATE/backend/config.json" "$NAME" \
     || die "the backend adapter's configuration was not written; see the line above"
 }
@@ -541,10 +555,13 @@ snapshot_stack() {  # a ROOT-OWNED copy of deploy/ and tools/ the supervisor uni
 enclave_units() {  # the Enclave's unit from EKKA's own generator, this setup's drop-in, and the stack's unit
   # `ekka enclave install-service` writes /etc/systemd/system/ekka.service from the ENROLLED home and its owner, and
   # enables it. Run with the Enclave's home named, as root (it writes the unit), after enrollment.
-  EKKA_HOME=$ENCLAVE_HOME EKKA_ENV=${EKKA_ENV:-prod} /usr/local/bin/ekka enclave install-service --no-start >"$DESKS_STATE/install-service.log" 2>&1 \
+  # A clean environment (no EKKA_HOME_OVERRIDE, no proxy); `--no-start`: this step enables and starts the units itself. The
+  # generator writes the ENVIRONMENT'S state folder as EKKA_HOME (prod: the home; staging: home/staging); the drop-in below
+  # pins EKKA_HOME back to the base home, or a non-prod daemon would look in home/staging/staging (Codex review of #4).
+  env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root EKKA_HOME=$ENCLAVE_HOME EKKA_ENV=${EKKA_ENV:-prod} /usr/local/bin/ekka enclave install-service --no-start >"$DESKS_STATE/install-service.log" 2>&1 \
     || die "ekka enclave install-service refused; see $DESKS_STATE/install-service.log"
   install -d -m 0755 /etc/systemd/system/ekka.service.d
-  render deploy/host/ekka.service.d/desks.conf.template /etc/systemd/system/ekka.service.d/desks.conf 0644 "EKKA_ENV=${EKKA_ENV:-prod}"
+  render deploy/host/ekka.service.d/desks.conf.template /etc/systemd/system/ekka.service.d/desks.conf 0644 "EKKA_ENV=${EKKA_ENV:-prod}" "ENCLAVE_HOME=$ENCLAVE_HOME"
   render deploy/host/ekka-desks.service.template /etc/systemd/system/ekka-desks.service 0644 "SNAPSHOT=$SNAPSHOT" "DESKS_STATE=$DESKS_STATE"
   systemctl daemon-reload
   systemctl enable ekka ekka-desks >/dev/null 2>&1 || die "the units could not be enabled"

@@ -61,12 +61,16 @@ class NoContainerEnclave(unittest.TestCase):
         self.assertIn("BindsTo=ekka.service", u)
         self.assertIn("After=ekka.service docker.service", u)
         self.assertRegex(u, r"ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock")
-        self.assertRegex(u, r"ExecStart=.*compose up --no-deps --abort-on-container-exit")
+        self.assertRegex(u, re.compile(r"ExecStart=.*compose up --no-deps --abort-on-container-exit --no-log-prefix \$DESKS_STACK_SERVICES$", re.M),
+                         "the service list comes from up.env, so the adapter joins only once configured (Codex #4 finding 3)")
+        self.assertIn("EnvironmentFile=@@DESKS_STATE@@/up.env", u)
+        self.assertNotRegex(u, r"ExecStart=.*ekka-backend", "never hard-coded: a fresh install has no adapter configuration yet")
         self.assertIn("WorkingDirectory=@@SNAPSHOT@@/deploy", u, "a root-owned snapshot, never a person's checkout")
-        self.assertIn("Restart=on-failure", u)
+        self.assertIn("Restart=always", u, "a clean container exit is still a stack that stopped serving (Codex #4 finding 8)")
 
     def test_the_enclave_drop_in_adds_the_group_and_resets_the_writable_paths(self):
         d = read("deploy", "host", "ekka.service.d", "desks.conf.template")
+        self.assertIn("Environment=EKKA_HOME=@@ENCLAVE_HOME@@", d, "the BASE home: the generator writes the environment's folder (Codex #4 finding 5)")
         self.assertIn("SupplementaryGroups=openshell", d)
         self.assertIn("RuntimeDirectory=\n", d, "cleared: tmpfiles own /run/ekka")
         self.assertRegex(d, r"ReadWritePaths=\nReadWritePaths=/var/lib/ekka/\.ekka /run/ekka /run/ekka-backend")
@@ -89,11 +93,21 @@ class NoContainerEnclave(unittest.TestCase):
 class TheWrapper(unittest.TestCase):
     PATH = os.path.join(ROOT, "deploy", "host", "sbin", "ekka")
 
+    @unittest.skipIf(os.geteuid() == 0, "this case is about a non-root caller")
     def test_it_is_executable_and_refuses_without_root(self):
         self.assertTrue(os.stat(self.PATH).st_mode & stat.S_IXUSR)
         r = subprocess.run(["bash", self.PATH, "desk", "list"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 77)
         self.assertIn("sudo -i, then: ekka desk list", r.stderr)
+
+    def test_it_refuses_an_environment_selector_flag(self):
+        """`ekka --dev whoami` would pick another EKKA environment; this server has one (Codex #4, answer 5)."""
+        for flag in ("--dev", "--staging", "--env=staging"):
+            r = subprocess.run(["bash", self.PATH, flag, "whoami"], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 78, flag)
+            self.assertIn("one environment", r.stderr)
+        r = subprocess.run(["bash", self.PATH, "--version"], capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 78, "--version passes the flag check")
 
     def test_as_root_it_drops_to_the_enclave_user_with_a_clean_environment(self):
         """`id` and `runuser` are stubbed: the wrapper must call runuser -u ekka with env -i and the configured home."""
@@ -116,6 +130,52 @@ class TheWrapper(unittest.TestCase):
             self.assertIn("EKKA_ENV=prod", args, "from /etc/ekka/desks.env (absent here), never the caller's shell")
             self.assertNotIn("EKKA_HOME_OVERRIDE=/tmp/evil", " ".join(args))
             self.assertEqual(args[-3:], ["/usr/local/bin/ekka", "desk", "list"])
+
+
+@unittest.skipUnless(os.geteuid() == 0 and shutil.which("runuser") and shutil.which("useradd"), "root with runuser: the python39 CI container")
+class HomeWritesAsTheEnclaveUser(unittest.TestCase):
+    """deploy/lib.sh writes into the Enclave's home AS the ekka user. Codex reproduced the previous root version following a
+    planted `plans` symlink out of the home and chowning a root-owned folder (review of #4, finding 1)."""
+
+    def test_a_planted_symlink_cannot_carry_roots_authority_out_of_the_home(self):
+        if subprocess.run(["id", "-u", "ekka"], capture_output=True).returncode != 0:
+            subprocess.run(["useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "ekka"], check=True)
+        with tempfile.TemporaryDirectory() as d:
+            os.chmod(d, 0o755)
+            home = os.path.join(d, "home"); os.mkdir(home); shutil.chown(home, "ekka", "ekka"); os.chmod(home, 0o700)
+            sentinel = os.path.join(d, "root-only"); os.mkdir(sentinel); os.chmod(sentinel, 0o700)   # root's, 0700
+            os.symlink(sentinel, os.path.join(home, "plans"))                                           # planted by "ekka"
+            os.chown(os.path.join(home, "plans"), shutil._get_uid("ekka"), shutil._get_gid("ekka"), follow_symlinks=False)
+            script = f"ENCLAVE_USER=ekka; ENCLAVE_HOME={home}\n. {ROOT}/deploy/lib.sh\necho planted | enclave_home_file plans/p.json 0600"
+            r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            st = os.stat(sentinel)
+            self.assertEqual((st.st_uid, stat.S_IMODE(st.st_mode)), (0, 0o700), "root's folder is untouched")
+            self.assertEqual(os.listdir(sentinel), [], "nothing was written through the link")
+            self.assertNotEqual(r.returncode, 0, "and the write was refused, by name")
+            self.assertIn("is a link", r.stderr)
+            r = subprocess.run(["bash", "-c", f"ENCLAVE_USER=ekka; ENCLAVE_HOME={home}\n. {ROOT}/deploy/lib.sh\necho ok | enclave_home_file notes/n.txt 0600"],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            st = os.stat(os.path.join(home, "notes", "n.txt"))
+            self.assertEqual(st.st_uid, shutil._get_uid("ekka"))
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o600)
+
+
+class EnrollmentAndBackup(unittest.TestCase):
+    def test_the_claim_runs_as_a_transient_unit_with_a_stop_deadline(self):
+        fn = up_function("step_enroll")
+        self.assertIn("systemd-run --unit=ekka-enroll --uid=ekka --gid=ekka", fn, "a managed lifecycle, not a backgrounded shell (Codex #4 finding 4)")
+        self.assertIn("systemctl stop ekka-enroll.service", fn)
+        self.assertIn("did not stop within 40 s", fn, "a deadline, and failure to stop is a refusal")
+        self.assertNotIn("kill -INT", fn)
+
+    def test_backup_refuses_to_touch_state_after_a_failed_stop(self):
+        b = read("deploy", "backup.sh")
+        self.assertIn("stop_writers() {", b)
+        self.assertRegex(b, r"systemctl stop ekka-desks\.service ekka\.service 2>/dev/null \|\| die")
+        self.assertIn("still running after stop; nothing was copied or changed", b)
+        self.assertEqual(b.count("    stop_writers   #"), 2, "before the backup copy and before the restore replaces state")
+        self.assertRegex(b, r"\[\[ -f /var/lib/ekka/\.ekka/\$envdir/enclave\.env \]\]", "the environment's own file, not a glob (Codex #4 finding 7)")
 
 
 class HostAccounts(unittest.TestCase):
