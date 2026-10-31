@@ -70,6 +70,8 @@ class NoContainerEnclave(unittest.TestCase):
         self.assertNotRegex(u, r"ExecStart=.*ekka-backend", "never hard-coded: a fresh install has no adapter configuration yet")
         self.assertIn("WorkingDirectory=@@SNAPSHOT@@/deploy", u, "a root-owned snapshot, never a person's checkout")
         self.assertIn("Restart=always", u, "a clean container exit is still a stack that stopped serving (Codex #4 finding 8)")
+        self.assertIn("PartOf=docker.service", u, "a Docker restart restarts the stack (measured: Requires alone left it down)")
+        self.assertIn("SuccessExitStatus=130 143", u, "a deliberate stop is not a failed unit (measured: compose exits 130)")
 
     def test_the_enclave_drop_in_adds_the_group_and_resets_the_writable_paths(self):
         d = read("deploy", "host", "ekka.service.d", "desks.conf.template")
