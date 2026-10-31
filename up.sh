@@ -942,7 +942,7 @@ case "${1:-}" in
     ls -1 "$DONE" 2>/dev/null | sed 's/^/done: /' || echo "nothing done yet"
     if is_done started; then
       echo "ekka (the Enclave): $(systemctl is-active ekka 2>/dev/null)   ekka-desks (the stack): $(systemctl is-active ekka-desks 2>/dev/null)"
-      [[ $(systemctl is-enabled ekka-desks 2>/dev/null) == masked ]] && echo "ekka-desks is MASKED: the emergency stop (docs/OPERATIONS.md). Resume: sudo systemctl unmask ekka-desks && sudo systemctl start ekka-desks"
+      [[ $(systemctl is-enabled ekka-desks 2>/dev/null) == masked ]] && echo "ekka-desks is MASKED: the emergency stop (docs/OPERATIONS.md). Resume: sudo systemctl unmask ekka-desks && sudo systemctl enable --now ekka-desks"
       [[ $(systemctl show -p Result --value ekka-desks 2>/dev/null) == start-limit-hit ]] && echo "ekka-desks hit its start limit (ten starts in five minutes): sudo journalctl -u ekka-desks -n 50, then sudo systemctl reset-failed ekka-desks && sudo systemctl start ekka-desks"
       [[ -S /run/ekka/openshell-interceptor.sock ]] && echo "interceptor socket: present" || { echo "interceptor socket: MISSING"; exit 1; }
       docker ps --format '  {{.Names}}: {{.Status}}' --filter label=com.docker.compose.project=ekka-desks
