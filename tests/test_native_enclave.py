@@ -75,7 +75,9 @@ class NoContainerEnclave(unittest.TestCase):
 
     def test_accounts_and_folders_come_from_systemd_files(self):
         su = read("deploy", "host", "sysusers.d", "ekka-desks.conf")
+        self.assertRegex(su, re.compile(r"^g ekka -\n", re.M), "the group first: `u NAME UID:GROUP` names an EXISTING group (measured on a fresh server)")
         self.assertRegex(su, re.compile(r"^u ekka 2000:ekka ", re.M), "uid 2000, its own group")
+        self.assertLess(su.index("g ekka -"), su.index("u ekka 2000:ekka"))
         self.assertRegex(su, re.compile(r"^g openshell -", re.M), "a group with a fresh gid")
         self.assertNotRegex(su, re.compile(r"^m ", re.M), "no membership lines: the unit's SupplementaryGroups= joins the Enclave")
         tf = read("deploy", "host", "tmpfiles.d", "ekka-desks.conf")
