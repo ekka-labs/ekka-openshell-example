@@ -163,12 +163,8 @@ stage_enclave_config() {
   . "$DESKS_STATE/desks.env"
   local gwkey; gwkey=$(openssl pkey -pubin -in "$T/jwt/public.pem" -outform DER | tail -c 32 | base64)
   kc_env
-  local subj; subj=$(python3 - <<'PY'
-import sys,json; sys.path.insert(0,"keycloak"); import apply_realm as a
-api=a.Api(); spec=json.load(open(a.SPEC)); c=a.find_client(api,spec,"ekka-enclave")
-print(api.get(a.realm_path(spec,f"/clients/{c['id']}/service-account-user"))["id"])
-PY
-)
+  wait_keycloak   # the sign-in service may be down or booting (the stack unit stops everything when the gateway exits)
+  local subj; subj=$(stage_enclave_subject) || die "Keycloak did not name the Enclave client's subject; nothing written"
   local f; f=$(mktemp); cat > "$f" <<EOF
 EKKA_OPENSHELL_GATEWAY=ekka-desks
 EKKA_OPENSHELL_GATEWAY_KEY_B64=$gwkey
@@ -199,7 +195,7 @@ EOF
 
 stage_enclave_subject() {
   kc_env
-  python3 - <<'PY'
+  python3 - 2>/dev/null <<'PY' || { echo "setup: Keycloak did not answer for the Enclave client's subject (is the sign-in service up? journalctl -u ekka-desks)" >&2; return 1; }
 import sys,json; sys.path.insert(0,"keycloak"); import apply_realm as a
 api=a.Api(); spec=json.load(open(a.SPEC)); c=a.find_client(api,spec,"ekka-enclave")
 print(api.get(a.realm_path(spec,f"/clients/{c['id']}/service-account-user"))["id"])  # workspace membership names the bare subject

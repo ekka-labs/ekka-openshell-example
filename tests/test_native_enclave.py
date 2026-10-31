@@ -64,7 +64,7 @@ class NoContainerEnclave(unittest.TestCase):
         self.assertRegex(u, r"ExecStartPre=.*compose .*up -d --wait keycloak-db keycloak edge",
                          "the issuer is up before the gateway asks it for OIDC discovery (measured: 503 during Keycloak's boot)")
         self.assertLess(u.index("up -d --wait keycloak-db"), u.index("ExecStart=/usr/bin/bash"))
-        self.assertRegex(u, re.compile(r"ExecStart=.*compose up --no-deps --abort-on-container-exit --no-log-prefix \$DESKS_STACK_SERVICES$", re.M),
+        self.assertRegex(u, re.compile(r"ExecStart=.*compose .*up --no-deps --abort-on-container-exit --no-log-prefix \$DESKS_STACK_SERVICES$", re.M),
                          "the service list comes from up.env, so the adapter joins only once configured (Codex #4 finding 3)")
         self.assertIn("EnvironmentFile=@@DESKS_STATE@@/up.env", u)
         self.assertNotRegex(u, r"ExecStart=.*ekka-backend", "never hard-coded: a fresh install has no adapter configuration yet")
