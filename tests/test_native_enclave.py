@@ -245,6 +245,14 @@ class TheInstaller(unittest.TestCase):
         u = read("deploy", "host", "ekka-desks.service.template")
         self.assertLess(u.index("ExecStartPre=/usr/bin/test ! -e @@DESKS_STATE@@/stack.hold"), u.index("wait-interceptor"), "the hold is the first check")
 
+    def test_the_stack_service_list_in_up_env_is_quoted(self):
+        """setup.sh sources up.env: an unquoted list with spaces ran `keycloak` as a command (measured on the walk box)."""
+        text = read("up.sh")
+        self.assertIn("echo 'DESKS_STACK_SERVICES=\"keycloak-db keycloak edge gateway\"'", text)
+        self.assertIn("echo 'DESKS_STACK_SERVICES=\"keycloak-db keycloak edge gateway ekka-backend\"'", text)
+        self.assertIn("DESKS_STACK_SERVICES=\"keycloak-db keycloak edge gateway ekka-backend\"/", up_function("step_desk_admin"))
+        self.assertNotRegex(text, r"DESKS_STACK_SERVICES=keycloak", "never the unquoted form")
+
     def test_the_main_sequence_installs_accounts_then_the_release_before_init(self):
         text = read("up.sh")
         self.assertIn("step_preflight; step_host_accounts; step_settings; step_images; step_backend_image; step_enclave_install; step_init;", text)

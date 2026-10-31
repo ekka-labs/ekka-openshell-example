@@ -169,8 +169,9 @@ step_settings() {
     echo "DESKS_DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
     echo "DESKS_OPENSHELL_GID=$(openshell_gid)"   # compose group_add: the gateway reaches the interceptor socket
     # The long-lived services ekka-desks.service runs in the foreground; the adapter joins once desk administration is on.
-    if [[ -f $DESKS_STATE/backend/config.json ]]; then echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway ekka-backend"
-    else echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway"; fi
+    # Quoted: setup.sh sources up.env, and an unquoted list would run `keycloak` as a command (measured on the walk box).
+    if [[ -f $DESKS_STATE/backend/config.json ]]; then echo 'DESKS_STACK_SERVICES="keycloak-db keycloak edge gateway ekka-backend"'
+    else echo 'DESKS_STACK_SERVICES="keycloak-db keycloak edge gateway"'; fi
     echo "EKKA_VERSION=$EKKA_VERSION"; echo "EKKA_ENV=${EKKA_ENV:-prod}"
     # The backend adapter (ADK-E1) is on only once its configuration exists. step_desk_admin writes it after this
     # machine is enrolled; turned on before that, the first `up` would start the adapter on a missing file
@@ -506,7 +507,7 @@ step_desk_admin() {  # desk administration through EKKA: only once up.env runs t
   write_adapter_config
   # Only now, with its configuration in place, the adapter's profile goes on and the adapter starts.
   grep -q '^COMPOSE_PROFILES=desk-admin$' "$DESKS_STATE/up.env" || echo "COMPOSE_PROFILES=desk-admin" >> "$DESKS_STATE/up.env"
-  sed -i 's/^DESKS_STACK_SERVICES=.*/DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway ekka-backend/' "$DESKS_STATE/up.env"
+  sed -i 's/^DESKS_STACK_SERVICES=.*/DESKS_STACK_SERVICES="keycloak-db keycloak edge gateway ekka-backend"/' "$DESKS_STATE/up.env"
   (cd deploy && bash setup.sh backend-preflight)   # its files are real files, whatever this Compose does
   # The adapter is one more long-lived service of the supervised stack: the unit reads the list from up.env.
   systemctl restart ekka-desks || die "the desks stack did not restart with the adapter; see: journalctl -u ekka-desks"
