@@ -1,0 +1,11 @@
+The repositories on this desk are in /sandbox/ekka-workspace, one folder each.
+/sandbox/ekka-workspace/.ekka/desk-map.json lists them with their addresses and commits.
+
+Answer this question about them:
+
+@{question}
+
+Read the code to answer it. Change no file in any repository.
+
+Write your answer to /sandbox/ekka-workspace/.ekka/answer.md, replacing what is there. Name the repository, the
+files and the line numbers you relied on. Then print the same answer.

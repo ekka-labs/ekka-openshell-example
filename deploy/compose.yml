@@ -1,0 +1,198 @@
+# EKKA agent desks: Keycloak with its database behind the edge, the
+# Enclave, and NVIDIA's gateway. Every image is pinned by digest. Set DESKS_NAME; DESKS_STATE defaults
+# to /var/lib/ekka-agent-desks and holds tls/ (deploy/certs.sh) and secrets/ (written by setup, mode 0600).
+name: ekka-desks
+networks:
+  front: {}
+  idp:
+    internal: true          # Keycloak and its database: no published port, no route out
+  backend:
+    internal: true          # the adapter, Enclave/gateway namespace and sign-in front: no route out
+volumes:
+  keycloak-db: {}
+  ekka-home: {}             # the Enclave's vault, desk files and attempt journal (a system of record; backed up)
+  ekka-run: {}              # the interceptor socket only, shared by the Enclave and the gateway
+  gateway-state: {}         # the gateway's database (a system of record; backed up)
+  ekka-backend-sock: {}     # the backend adapter's socket only, shared by the Enclave and the adapter
+  ekka-backend-state: {}    # the adapter's operation-recovery store: nothing secret, and it outlives a restart
+services:
+  keycloak-db:
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    restart: unless-stopped
+    networks: [idp]
+    env_file:
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/secrets/keycloak-db.env
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+    volumes: [keycloak-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "keycloak", "-d", "keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    restart: unless-stopped
+    networks: [idp]
+    command: ["start"]
+    env_file:
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/secrets/keycloak.env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HOSTNAME: https://${DESKS_NAME:?set DESKS_NAME}
+      KC_HOSTNAME_ADMIN: https://127.0.0.1:8443
+      KC_HTTP_ENABLED: "true"           # plain http only on the internal idp network; TLS ends at edge
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: "true"         # management port 9000, never proxied
+    depends_on:
+      keycloak-db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  edge:
+    image: nginxinc/nginx-unprivileged:1.30.4-alpine@sha256:adf5042a17f4ecdd200c595fa9ffd1be37efb18f89a830bd1a00e4ab4d59d42c
+    restart: unless-stopped
+    networks:
+      front:
+        aliases: ["${DESKS_NAME}"]       # the Enclave and the gateway reach the issuer by its public name
+      idp: {}
+      backend:
+        aliases: ["${DESKS_NAME}"]       # the backend adapter reaches the issuer by the same name
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 443 # listen on 443 as uid 101, inside this container only
+    ports:
+      - "${DESKS_EDGE_BIND:-0.0.0.0}:443:443"    # people's sign-in: the desks realm only
+      - "127.0.0.1:8443:9443"                  # the admin console: this machine only
+    volumes:
+      - ./edge/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/edge:/tls/edge:ro
+    depends_on:
+      keycloak: {condition: service_healthy}
+  ekka-enclave:
+    build:
+      context: ./enclave
+      args: {EKKA_VERSION: "${EKKA_VERSION:-0.1.124}"}
+    image: ekka-agent-desks-enclave:${EKKA_VERSION:-0.1.124}
+    # The fallback is the kit's floor (up.sh DESK_ADMIN_MIN_EKKA), never older: a compose run without up.env
+    # (2026-10-14, deploy/backup.sh) must not bring back an Enclave below a release that cannot be rolled back.
+    restart: unless-stopped
+    # Gateway shares this network namespace: the executor reaches its real loopback.
+    # Network ownership gives this service no Docker socket or gateway credentials.
+    networks:
+      front: {}
+      backend:
+        aliases: [host.openshell.internal]
+    ports:
+      - "${DESKS_GATEWAY_BIND:-0.0.0.0}:8080:8080"
+    # No Docker socket. The published listener belongs to the gateway process.
+    environment:
+      EKKA_ENV: ${EKKA_ENV:-}               # the EKKA environment this Enclave is enrolled in (setup enroll); empty refuses at boot
+    volumes:
+      - ekka-home:/var/lib/ekka/.ekka
+      - ekka-run:/run/ekka
+      - ekka-backend-sock:/run/ekka-backend   # the API gate dials the backend adapter's socket here
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/ca.crt:/tls/ca.crt:ro   # the executor trusts the gateway and the issuer with it
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/ekka/openshell-interceptor.sock"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    depends_on:
+      edge: {condition: service_started}
+  gateway-init:
+    # NVIDIA's image runs as 1000:1000 but owns no folder for it (its own folders are 65532), so a fresh
+    # state volume would be root's and the gateway could not create its database. One-shot, no network.
+    image: alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    restart: "no"
+    network_mode: none
+    command: ["sh", "-c", "chown 1000:1000 /state && chmod 0700 /state"]
+    volumes: [gateway-state:/state]
+  gateway:
+    image: ghcr.io/nvidia/openshell/gateway@sha256:bdb4fe248070032c88be78f029dad9325cb698480e90486e1413a674a5d8edc8
+    restart: unless-stopped
+    command: []                                # NVIDIA's CMD flags would override the TOML's bind address
+    user: "1000:1000"
+    group_add: ["${DESKS_DOCKER_GID:?setup sets the docker socket's group id}"]
+    network_mode: service:ekka-enclave
+    # Ports and aliases are on the namespace owner; never on this service.
+    environment:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      OPENSHELL_TELEMETRY_ENABLED: "${OPENSHELL_TELEMETRY_ENABLED:-false}"   # NVIDIA's usage reporting: off unless up.sh is told on
+      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/state/gateway.db?mode=rwc"
+      HOME: /var/lib/openshell/state
+      OPENSHELL_GRPC_ENDPOINT: https://host.openshell.internal:8080
+      OPENSHELL_DOCKER_SUPERVISOR_BIN: ${DESKS_STATE:-/var/lib/ekka-agent-desks}/supervisor/openshell-supervisor
+      SSL_CERT_FILE: /tls/ca-bundle.crt        # public roots + the desks CA: the issuer AND public hosts (AWS STS) are trusted
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock          # the ONLY service with the socket: root on this host
+      - gateway-state:/var/lib/openshell/state
+      - ekka-run:/run/ekka
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/gateway.toml:/etc/openshell/gateway.toml:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/ca.crt:/tls/ca.crt:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/ca-bundle.crt:/tls/ca-bundle.crt:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/gateway:/tls/gateway:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/jwt:/tls/jwt:ro
+      - ${DESKS_STATE:-/var/lib/ekka-agent-desks}/supervisor/openshell-supervisor:${DESKS_STATE:-/var/lib/ekka-agent-desks}/supervisor/openshell-supervisor:ro
+    depends_on:
+      gateway-init: {condition: service_completed_successfully}
+      ekka-enclave: {condition: service_healthy, restart: true}   # interceptor first; setup.sh also reattaches on recreation
+      edge: {condition: service_started}
+  ekka-backend:
+    # The backend adapter (ekka.backend.v1): desk administration through EKKA. It takes desk changes only from
+    # the Enclave's API gate, over the socket, each with a Govern-signed token it verifies. OFF until up.sh turns
+    # on the desk-admin profile, which it does only for an Enclave release that can dial a socket (ADK-E6).
+    profiles: [desk-admin]
+    image: ${EKKA_BACKEND_IMAGE:-}             # up.sh pins <deploy/pins.json registry>/ekka-backend@sha256:<digest> in up.env
+    # Its one configuration file (contracts backend/adapter-config.v1), written by up.sh (ADK-E3); no credential.
+    command: ["serve", "--config", "/etc/ekka-backend/config.json"]   # the adapter serves only with `serve` (ekka-backend main.rs)
+    restart: unless-stopped
+    user: "2000:1000"                          # the Enclave's user: the socket is theirs alone
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [backend]                        # the gateway and the sign-in front, and nothing else
+    # no ports, no Docker socket, no ekka-home
+    tmpfs: [/tmp]
+    volumes:
+      - ekka-backend-sock:/run/ekka-backend
+      - ekka-backend-state:/var/lib/ekka-backend
+      # Files, never created by Docker: a missing one is refused by name ("bind source path does not exist"),
+      # instead of becoming an empty directory the adapter then cannot read (measured; regression review).
+      - type: bind
+        source: ${DESKS_STATE:-/var/lib/ekka-agent-desks}/backend/config.json
+        target: /etc/ekka-backend/config.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind                                  # the gateway's CA
+        source: ${DESKS_STATE:-/var/lib/ekka-agent-desks}/tls/ca.crt
+        target: /etc/ekka-backend/ca.pem
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/ekka-backend", "health"]  # the image's ENTRYPOINT binary; distroless, no shell
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      backend-init: {condition: service_completed_successfully}   # its state folder, before the store opens it
+      ekka-enclave: {condition: service_healthy}
+      gateway: {condition: service_started}
+  backend-init:
+    # The adapter's image is distroless and owns no /var/lib/ekka-backend, so a fresh state volume would be
+    # root's, 0755, and the adapter's store refuses that (STORE_UNSAFE): serve would exit and restart forever.
+    # One-shot, no network, the same shape as gateway-init: the Enclave's user owns it, mode 0700.
+    profiles: [desk-admin]
+    image: alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    restart: "no"
+    network_mode: none
+    command: ["sh", "-c", "chown 2000:1000 /state && chmod 0700 /state"]
+    volumes: [ekka-backend-state:/state]

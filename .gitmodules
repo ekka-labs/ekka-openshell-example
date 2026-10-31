@@ -1,0 +1,3 @@
+[submodule "external/desk-base"]
+	path = external/desk-base
+	url = https://github.com/ekka-labs/ekka-agent-desks.git

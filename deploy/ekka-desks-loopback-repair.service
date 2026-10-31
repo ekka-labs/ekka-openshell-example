@@ -1,0 +1,17 @@
+[Unit]
+Description=Check and repair the existing EKKA gateway namespace
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecCondition=/usr/bin/systemctl --quiet is-active docker.service
+ExecStart=/usr/bin/flock -n /run/ekka-desks-loopback-repair.lock /usr/bin/timeout 110 /usr/bin/python3 /usr/local/libexec/ekka-desks-loopback/tools/loopback_repair.py run
+TimeoutStartSec=115
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ekka-desks-loopback-repair
+
+[Install]
+WantedBy=docker.service

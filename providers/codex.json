@@ -1,0 +1,89 @@
+{
+  "id": "codex",
+  "displayName": "Codex",
+  "description": "OpenAI Codex CLI",
+  "category": "PROVIDER_PROFILE_CATEGORY_AGENT",
+  "credentials": [
+    {
+      "name": "access_token",
+      "description": "Codex OAuth access token",
+      "envVars": [
+        "CODEX_AUTH_ACCESS_TOKEN"
+      ],
+      "required": true
+    },
+    {
+      "name": "refresh_token",
+      "description": "Codex OAuth refresh token",
+      "envVars": [
+        "CODEX_AUTH_REFRESH_TOKEN"
+      ],
+      "required": true
+    },
+    {
+      "name": "account_id",
+      "description": "Codex account identifier",
+      "envVars": [
+        "CODEX_AUTH_ACCOUNT_ID"
+      ],
+      "required": true
+    },
+    {
+      "name": "id_token",
+      "description": "Codex OAuth ID token",
+      "envVars": [
+        "CODEX_AUTH_ID_TOKEN"
+      ]
+    }
+  ],
+  "endpoints": [
+    {
+      "host": "api.openai.com",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_WRITE"
+    },
+    {
+      "host": "auth.openai.com",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_WRITE"
+    },
+    {
+      "host": "chatgpt.com",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_WRITE"
+    },
+    {
+      "host": "ab.chatgpt.com",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_WRITE"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "/usr/bin/codex"
+    },
+    {
+      "path": "/usr/local/bin/codex"
+    },
+    {
+      "path": "/usr/lib/node_modules/@openai/**"
+    }
+  ],
+  "inferenceCapable": true,
+  "discovery": {
+    "credentials": [
+      "access_token",
+      "refresh_token",
+      "account_id",
+      "id_token"
+    ]
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "plan": {
+    "code": "example.desk.setup.{{deskCode}}.v1",
+    "name": "Set up the {{desk}} desk with the repositories you choose"
+  },
+  "definition": {
+    "schema_version": "ekka.plan.v2",
+    "inputs": {
+      "repos": "The repositories to put on the {{desk}} desk: https addresses, as a JSON list or one per line."
+    },
+    "operations": [
+      {
+        "id": "setup",
+        "display_name": "Clone missing repositories and reuse existing checkouts on the {{desk}} desk",
+        "execution": {
+          "preferred": {
+            "mode": "async",
+            "runtime": "node"
+          }
+        },
+        "max_visits": 1,
+        "steps": [
+          {
+            "id": "run",
+            "action_ref": "ekka.job.run.v1",
+            "feature": "job.run",
+            "resource": "desks/{{desk}}",
+            "identity": {
+              "requires_user_context": false
+            },
+            "action_input": {},
+            "prompt": {
+              "source": "platform",
+              "slug": "desk-setup",
+              "version": 4
+            },
+            "inputs": {
+              "repos": "@input.repos",
+              "run_id": "@ekka.run_id",
+              "outputs": [
+                {
+                  "kind": "desk_map",
+                  "path": ".ekka/desk-map.json"
+                }
+              ],
+              "facts_from": "desk_map"
+            },
+            "step_input_contract": {
+              "type": "object"
+            },
+            "step_output_contract": {
+              "type": "object",
+              "properties": {
+                "verdict": {
+                  "type": "string",
+                  "enum": [
+                    "succeeded",
+                    "failed"
+                  ]
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "partial",
+                    "failed"
+                  ]
+                },
+                "cloned": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "updated": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "reset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "skipped": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "failed": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "reused": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                }
+              },
+              "required": [
+                "verdict"
+              ]
+            }
+          }
+        ],
+        "transitions": {
+          "output.verdict == 'failed'": "fail",
+          "output.result == 'ready'": "end",
+          "default": "fail"
+        }
+      }
+    ]
+  }
+}

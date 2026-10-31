@@ -1,0 +1,98 @@
+{
+  "plan": {
+    "code": "example.desk.ask.{{deskCode}}.v1",
+    "name": "Ask your code a question on {{desk}}"
+  },
+  "definition": {
+    "schema_version": "ekka.plan.v2",
+    "inputs": {
+      "question": "The question about the repositories on the {{desk}} desk, in plain words."
+    },
+    "operations": [
+      {
+        "id": "ask",
+        "display_name": "The agent answers on the {{desk}} desk; read it on the installed machine with: sudo ./up.sh ekka run show <run id>",
+        "execution": {
+          "preferred": {
+            "mode": "async",
+            "runtime": "node"
+          }
+        },
+        "max_visits": 1,
+        "steps": [
+          {
+            "id": "run",
+            "action_ref": "ekka.job.run.v1",
+            "feature": "job.run",
+            "resource": "desks/{{desk}}",
+            "identity": {
+              "requires_user_context": false
+            },
+            "action_input": {},
+            "prompt": {
+              "source": "platform",
+              "slug": "desk-ask",
+              "version": 8
+            },
+            "inputs": {
+              "question": "@input.question",
+              "run_id": "@ekka.run_id",
+              "outputs": [
+                {
+                  "kind": "answer",
+                  "path": ".ekka/answer.md"
+                },
+                {
+                  "kind": "ask_record",
+                  "path": ".ekka/ask-record.json"
+                }
+              ],
+              "facts_from": "ask_record"
+            },
+            "step_input_contract": {
+              "type": "object"
+            },
+            "step_output_contract": {
+              "type": "object",
+              "properties": {
+                "verdict": {
+                  "type": "string",
+                  "enum": [
+                    "succeeded",
+                    "failed"
+                  ]
+                },
+                "answer": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                "repos_reset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "files_discarded": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                "working_tree_changed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "verdict"
+              ]
+            }
+          }
+        ],
+        "transitions": {
+          "output.verdict == 'failed'": "fail",
+          "output.status == 'timeout'": "fail",
+          "exists(output.answer)": "end",
+          "default": "fail"
+        }
+      }
+    ]
+  }
+}

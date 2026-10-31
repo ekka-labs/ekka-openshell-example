@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "filesystem": {
+    "includeWorkdir": true,
+    "readOnly": [
+      "/bin",
+      "/usr",
+      "/lib",
+      "/proc",
+      "/dev/urandom",
+      "/etc",
+      "/var/log"
+    ],
+    "readWrite": [
+      "/tmp",
+      "/dev/null"
+    ]
+  },
+  "landlock": {
+    "compatibility": "hard_requirement"
+  },
+  "process": {
+    "runAsUser": "1000",
+    "runAsGroup": "1000"
+  },
+  "networkPolicies": {
+    "github_clone": {
+      "name": "github-clone",
+      "binaries": [
+        {
+          "path": "/usr/bin/git"
+        }
+      ],
+      "endpoints": [
+        {
+          "host": "github.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "rules": [
+            {
+              "allow": {
+                "method": "GET",
+                "path": "/**/info/refs*"
+              }
+            },
+            {
+              "allow": {
+                "method": "POST",
+                "path": "/**/git-upload-pack"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

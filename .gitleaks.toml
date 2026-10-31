@@ -1,0 +1,11 @@
+title = "EKKA OpenShell example secret scanning"
+[extend]
+useDefault = true
+[[allowlists]]
+description = "Exact non-secret fixture and service configuration values"
+regexTarget = "line"
+regexes = [
+  '''KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak''',
+  '''GATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="''',
+  '''"api_gate_instance": "enclave1a2b3c4dApi"'''
+]

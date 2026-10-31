@@ -1,0 +1,17 @@
+{
+  "source": "https://github.com/NVIDIA/OpenShell/tree/v0.1.3/providers",
+  "tag": "v0.1.3",
+  "commit": "e1f3c82caa3ed3b65de22889ae7ef32a774878ef",
+  "converter": "OpenShell's own profile parser (parse_profile_yaml, validate_before_lowering, to_proto) at the same commit",
+  "files": {
+    "claude-code.json": "10da40f3dde426548d7d820802acfce7bd4c1a1c0453afad00f541a5dfe7430b",
+    "claude-code.yaml": "4e74c7a9d71ce991534b36ea1dd662765f61883e01820f6a116fe8b7d334bd1f",
+    "codex.json": "15d0056f20d6db4df6570d5e7a2999f52c2fe2e54c87a60964a065018ecb7533",
+    "codex.yaml": "676059e95c2fa3b2bc68f98401e8ead16501d46dc500225a249f83f172a2599a",
+    "github.json": "ba44c94ed55a4d7e3ed3bfb6ddd793fa6ffb2e466e1188b9c64e1eea9b144d84",
+    "github.yaml": "dc48407b3ab3b5004f3673aa3a76feae438c67fbe95354453f24f2c7bdf319a9"
+  },
+  "changes": {
+    "claude-code": "statsig.anthropic.com and sentry.io dropped, as the profile's own comment offers: the gateway binds a key to every host in its profile"
+  }
+}
