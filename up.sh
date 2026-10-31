@@ -241,7 +241,7 @@ step_images() {
 step_enclave_install() {  # the signed EKKA release on this machine, through EKKA's own installer, cosign REQUIRED
   say "the EKKA release"
   local have="" want=$EKKA_VERSION
-  [[ -x /usr/local/bin/ekka ]] && have=$(/usr/local/bin/ekka --version 2>/dev/null | awk '{print $2}' || true)
+  [[ -x /usr/local/bin/ekka ]] && have=$(/usr/local/bin/ekka --version 2>/dev/null | head -1 | awk '{print $2}' || true)   # `ekka 0.1.126` then commit and build lines
   if [[ $have == "$want" ]]; then ok "ekka $want at /usr/local/bin/ekka"
   else
     local t; t=$(mktemp -d)
@@ -254,7 +254,7 @@ step_enclave_install() {  # the signed EKKA release on this machine, through EKK
     env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root EKKA_VERSION="$want" EKKA_INSTALL_DIR=/usr/local/bin sh "$t/install.sh" >"$DESKS_STATE/ekka-install.log" 2>&1 \
       || { rm -rf "$t"; die "EKKA $want did not install; see $DESKS_STATE/ekka-install.log (a rollback is explicit: EKKA_VERSION=<older> plus the installer's --allow-downgrade)"; }
     rm -rf "$t"
-    [[ $(/usr/local/bin/ekka --version 2>/dev/null | awk '{print $2}') == "$want" ]] || die "/usr/local/bin/ekka is not $want after the install"
+    [[ $(/usr/local/bin/ekka --version 2>/dev/null | head -1 | awk '{print $2}') == "$want" ]] || die "/usr/local/bin/ekka is not $want after the install"
     ok "ekka $want installed (signature checked by EKKA's installer)${have:+; the previous binary is /usr/local/bin/ekka.before-$have}"
   fi
   # `ekka` for administrators: after `sudo -i`, the same command as everywhere, run as the Enclave's user.
