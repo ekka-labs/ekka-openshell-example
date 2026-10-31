@@ -20,8 +20,12 @@ EnvironmentFile=@@DESKS_STATE@@/up.env
 # No gateway before the Enclave's interceptor socket answers: fail closed, by a real connect, not a file test.
 ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock 60
 # One-shot folders first (the gateway's and the adapter's state, owned by their users), run to completion.
-ExecStartPre=/usr/bin/bash setup.sh compose up gateway-init backend-init
-ExecStart=/usr/bin/bash setup.sh compose up --no-deps --abort-on-container-exit --no-log-prefix $DESKS_STACK_SERVICES
+ExecStartPre=/usr/bin/bash setup.sh compose --ansi never --progress plain up gateway-init backend-init
+# The sign-in service and the edge, started with compose's own health order and WAITED for: the gateway asks the issuer
+# for OIDC discovery the moment it starts, and a Keycloak still booting answers 503 (measured: the gateway exited and
+# the whole stack aborted). `--no-deps` on the foreground start below would skip that order, so it is done here.
+ExecStartPre=/usr/bin/bash setup.sh compose --ansi never --progress plain up -d --wait keycloak-db keycloak edge
+ExecStart=/usr/bin/bash setup.sh compose --ansi never --progress plain up --no-deps --abort-on-container-exit --no-log-prefix $DESKS_STACK_SERVICES
 # ALWAYS: a container that exits cleanly is still a stack that stopped serving; `systemctl stop` (and `mask`, to keep it
 # stopped across Enclave restarts and reboots) remain the ways to mean it.
 Restart=always

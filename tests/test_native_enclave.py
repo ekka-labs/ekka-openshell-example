@@ -61,6 +61,9 @@ class NoContainerEnclave(unittest.TestCase):
         self.assertIn("BindsTo=ekka.service", u)
         self.assertIn("After=ekka.service docker.service", u)
         self.assertRegex(u, r"ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock")
+        self.assertRegex(u, r"ExecStartPre=.*compose .*up -d --wait keycloak-db keycloak edge",
+                         "the issuer is up before the gateway asks it for OIDC discovery (measured: 503 during Keycloak's boot)")
+        self.assertLess(u.index("up -d --wait keycloak-db"), u.index("ExecStart=/usr/bin/bash"))
         self.assertRegex(u, re.compile(r"ExecStart=.*compose up --no-deps --abort-on-container-exit --no-log-prefix \$DESKS_STACK_SERVICES$", re.M),
                          "the service list comes from up.env, so the adapter joins only once configured (Codex #4 finding 3)")
         self.assertIn("EnvironmentFile=@@DESKS_STATE@@/up.env", u)
@@ -231,6 +234,14 @@ class TheInstaller(unittest.TestCase):
         self.assertIn("ekka enclave install-service", fn)
         self.assertIn("ekka.service.d/desks.conf", fn)
         self.assertIn("systemctl enable ekka ekka-desks", fn)
+
+    def test_the_first_start_masks_the_stack_until_the_secret_is_in_the_vault(self):
+        fn = up_function("step_start")
+        fresh = fn[fn.index("; return; fi"):]
+        self.assertLess(fresh.index("systemctl mask ekka-desks"), fresh.index("enclave-secret"))
+        self.assertLess(fresh.index("enclave-secret"), fresh.index("systemctl unmask ekka-desks"))
+        self.assertLess(fresh.index("systemctl unmask ekka-desks"), fresh.index("systemctl restart ekka-desks"))
+        self.assertIn("systemctl unmask ekka-desks", fn[:fn.index("; return; fi")], "a rerun repairs a first install that died masked")
 
     def test_the_main_sequence_installs_accounts_then_the_release_before_init(self):
         text = read("up.sh")

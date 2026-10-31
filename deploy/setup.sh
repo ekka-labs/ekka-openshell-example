@@ -206,10 +206,25 @@ print(api.get(a.realm_path(spec,f"/clients/{c['id']}/service-account-user"))["id
 PY
 }
 
+wait_keycloak() {  # Keycloak answers its master realm and a token call; started here if it is not up (the stack unit may be masked)
+  local i
+  $P --env-file "$DESKS_STATE/desks.env" up -d --wait keycloak-db keycloak edge >/dev/null 2>&1 || true   # no gateway: no preflight needed
+  for i in $(seq 1 60); do
+    curl -sf -o /dev/null --cacert "$T/ca.crt" https://127.0.0.1:8443/realms/master 2>/dev/null \
+      && python3 keycloak/apply_realm.py enclave-subject >/dev/null 2>&1 && return 0
+    sleep 5
+  done
+  die "Keycloak did not answer in 5 minutes; see: journalctl -u ekka-desks, sudo ./setup.sh compose logs keycloak"
+}
+
 stage_enclave_secret() {
   local env=${1:-}; [[ -n $env ]] || die "usage: enclave-secret <env>"
   kc_env
-  python3 keycloak/apply_realm.py enclave-secret | ekka_run "$env" secret put OPENSHELL_EXECUTOR_CLIENT_SECRET --stdin
+  wait_keycloak   # the stack may be starting Keycloak again at this very moment (the Enclave's unit pulls the stack in)
+  local secret; secret=$(python3 keycloak/apply_realm.py enclave-secret) || die "Keycloak did not hand out the Enclave client's secret; nothing stored"
+  [[ -n $secret ]] || die "Keycloak answered an empty secret; nothing stored"
+  printf '%s' "$secret" | ekka_run "$env" secret put OPENSHELL_EXECUTOR_CLIENT_SECRET --stdin
+  secret=
   say "the Enclave client's secret is in the vault as OPENSHELL_EXECUTOR_CLIENT_SECRET (never printed)"
 }
 
