@@ -1,0 +1,159 @@
+# This setup's gateway.toml. A template: setup writes deploy/state's copy with
+# @@PUBLIC_NAME@@ filled in. The bindings are runner main's adapter manifest (14 validate, 9 post_commit), the
+# 23 RPC and phase pairs in all.
+[openshell]
+version = 2
+
+[openshell.gateway]
+name = "ekka-desks"
+bind_address = "0.0.0.0:8080"
+health_bind_address = "0.0.0.0:8081"
+compute_driver = "docker"
+policy_validation_failure_mode = "fail_closed"
+guest_tls_ca = "/tls/ca.crt"                       # what desk supervisors trust for the gateway (CA only)
+
+[openshell.gateway.tls]
+cert_path = "/tls/gateway/tls.crt"
+key_path = "/tls/gateway/tls.key"
+# never client_ca_path: a gateway that trusts client certificates can hand credentials out
+
+[openshell.gateway.oidc]
+issuer = "https://@@PUBLIC_NAME@@/realms/ekka-desks"  # IDENTICAL to Keycloak's hostname + realm and the Enclave's issuer
+audience = "ekka-desks"
+roles_claim = "realm_access.roles"
+admin_role = "openshell-admin"
+user_role = "openshell-user"
+scopes_claim = "scope"
+jwks_ttl_secs = 300
+# never dangerously_allow_insecure_http: the issuer is https, trusted through SSL_CERT_FILE (the desks CA)
+
+[openshell.gateway.auth]
+allow_unauthenticated_users = false
+
+[openshell.gateway.mtls_auth]
+enabled = false                                    # people and the Enclave sign in through OIDC only
+operator_enabled = false                           # never: an operator certificate can export desk credentials
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/tls/jwt/signing.pem"
+public_key_path = "/tls/jwt/public.pem"
+kid_path = "/tls/jwt/kid"
+gateway_id = "ekka-desks"
+
+[openshell.drivers.docker]
+socket_path = "/var/run/docker.sock"
+sandbox_label = "ekka-desks"
+enable_bind_mounts = false
+allow_driver_config = false                        # off: it would let a sandbox's creator attach mounts
+image_pull_policy = "never"                        # the desk image is the one this machine built (ekka-desk:local);
+                                                   # never fetched, so its content ID is what the desks grant pins
+
+[[openshell.gateway.interceptors]]
+name = "ekka-governance"
+grpc_endpoint = "unix:///run/ekka/openshell-interceptor.sock"
+audience = "urn:ekka:openshell:interceptor"
+order = 10
+failure_policy = "fail_closed"
+binding_policy = "allowlist"
+timeout = "500ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["validate"]  # refused for the Enclave's own identity; a person's create is OpenShell's decision
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateConfig"
+phases = ["validate"]  # only a signed-in person, a whole valid policy, never while a job runs on that desk
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/SubmitPolicyAnalysis"
+phases = ["validate"]  # telemetry allowed; any proposed chunk is refused
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/AttachSandboxProvider"
+phases = ["validate"]  # only the provider the attempt names; never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSshSession"
+phases = ["validate"]  # denied in this release: another door into the sandbox
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ExposeService"
+phases = ["validate"]  # denied in this release: HTTP out of the sandbox
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ImportProviderProfiles"
+phases = ["validate"]  # every endpoint must be enforce; never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProviderProfiles"
+phases = ["validate"]  # every endpoint must be enforce; never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProviderProfile"
+phases = ["validate"]  # never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateProvider"
+phases = ["validate"]  # never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProvider"
+phases = ["validate"]  # never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProvider"
+phases = ["validate"]  # never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DetachSandboxProvider"
+phases = ["validate"]  # never while a job is in flight
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteSandbox"
+phases = ["validate"]  # refused for the Enclave's own identity; a person's delete is OpenShell's decision
+
+[[openshell.gateway.interceptors]]
+name = "ekka-observer"
+grpc_endpoint = "unix:///run/ekka/openshell-interceptor.sock"
+audience = "urn:ekka:openshell:interceptor"
+order = 20
+failure_policy = "fail_open"
+binding_policy = "allowlist"
+timeout = "500ms"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/AttachSandboxProvider"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/ImportProviderProfiles"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProviderProfiles"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProviderProfile"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateProvider"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/UpdateProvider"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteProvider"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DetachSandboxProvider"
+phases = ["post_commit"]  # record the committed change
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteSandbox"
+phases = ["post_commit"]  # record the committed change

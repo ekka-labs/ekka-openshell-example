@@ -1,0 +1,51 @@
+{
+  "pack": "rust",
+  "about": "Rust crates and toolchains: download only (a crate publish is a PUT, which read-only refuses).",
+  "rules": {
+    "crates": {
+      "why": "cargo's sparse index, crate downloads and the crates.io API, read only",
+      "endpoints": [
+        {
+          "host": "index.crates.io",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        },
+        {
+          "host": "static.crates.io",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        },
+        {
+          "host": "crates.io",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        }
+      ],
+      "binaries": [
+        "/usr/**/bin/cargo"
+      ]
+    },
+    "toolchains": {
+      "why": "rustup's toolchain and component downloads",
+      "endpoints": [
+        {
+          "host": "static.rust-lang.org",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        }
+      ],
+      "binaries": [
+        "/usr/**/bin/rustup",
+        "/usr/**/bin/cargo"
+      ]
+    }
+  }
+}

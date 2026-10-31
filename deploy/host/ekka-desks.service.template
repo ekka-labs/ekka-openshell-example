@@ -1,0 +1,56 @@
+# The desks stack (sign-in, edge, NVIDIA's gateway, the backend adapter), supervised by systemd and BOUND to the
+# Enclave: it stops when the Enclave stops or fails, and starts when the Enclave starts (the Enclave's drop-in Wants
+# it). Compose runs in the FOREGROUND, so a container that exits ends this unit and systemd restarts it; `restart:`
+# policies in compose.yml are "no" on purpose. Written by up.sh from this template.
+# It runs from a ROOT-OWNED snapshot of deploy/ (@@SNAPSHOT@@), never from a person's checkout. up.sh writes it to
+# /usr/local/lib/systemd/system/, so `systemctl mask` can place its /dev/null link in /etc/systemd/system/ over it.
+[Unit]
+Description=EKKA desks stack (gateway, sign-in, edge, adapter)
+BindsTo=ekka.service
+After=ekka.service docker.service network-online.target
+Requires=docker.service
+# A Docker restart stops this unit (Requires) AND starts it again (PartOf); measured: without PartOf the stack stayed down.
+PartOf=docker.service
+# Ten starts in five minutes before systemd gives up (the drills: stop, start, kill, Docker restart in a row); then
+# `systemctl reset-failed ekka-desks` and `start`. up.sh status names a start-limit stop.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=@@SNAPSHOT@@/deploy
+Environment=DESKS_STATE=@@DESKS_STATE@@
+# DESKS_STACK_SERVICES: the long-lived services, written by up.sh; the adapter joins the list only once its configuration exists.
+EnvironmentFile=@@DESKS_STATE@@/up.env
+# A hold: while up.sh is between the Enclave's first start and its client secret, the stack must not start (the gateway
+# would exit on a sign-in it cannot make, and the stack would abort around the steps that need Keycloak). up.sh writes
+# the hold first and removes it once the secret is in the vault; a held start fails at once and touches nothing.
+ExecStartPre=/usr/bin/test ! -e @@DESKS_STATE@@/stack.hold
+# No gateway before the Enclave's interceptor socket answers: fail closed, by a real connect, not a file test.
+ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock 60
+# One-shot folders first (the gateway's and the adapter's state, owned by their users), run to completion.
+ExecStartPre=/usr/bin/bash setup.sh compose --ansi never --progress plain up gateway-init backend-init
+# The sign-in service and the edge, started with compose's own health order and WAITED for: the gateway asks the issuer
+# for OIDC discovery the moment it starts, and a Keycloak still booting answers 503 (measured: the gateway exited and
+# the whole stack aborted). `--no-deps` on the foreground start below would skip that order, so it is done here.
+ExecStartPre=/usr/bin/bash setup.sh compose --ansi never --progress plain up -d --wait keycloak-db keycloak edge
+ExecStart=/usr/bin/bash setup.sh compose --ansi never --progress plain up --no-deps --abort-on-container-exit --no-log-prefix $DESKS_STACK_SERVICES
+# ALWAYS: a container that exits cleanly is still a stack that stopped serving; `systemctl stop` (and `mask`, to keep it
+# stopped across Enclave restarts and reboots) remain the ways to mean it.
+Restart=always
+RestartSec=5
+# A deliberate stop ends compose with 130 (SIGINT) or 143 (SIGTERM): that is success, not a failed unit (measured).
+SuccessExitStatus=130 143
+# A stop, a timeout or a failure between the detached pre-start above and the foreground start would leave Keycloak,
+# its database and the edge running under Docker with no unit holding them (Codex review of #4, finding 6). After every
+# stop the stack's services are stopped by name; on a normal stop they are already down and this changes nothing.
+# NOT while the hold is on: a held start fails at the first pre-start and this runs after it too, and during a first
+# install the installer itself is running Keycloak and the edge for its own steps (measured 2026-10-31: ten held starts in
+# fifty seconds stopped them ten times and the install timed out waiting for the sign-in service).
+# `-`: its exit status never marks the unit failed (Docker itself may be the one stopping).
+ExecStopPost=-/usr/bin/bash -c 'test -e @@DESKS_STATE@@/stack.hold || exec /usr/bin/bash setup.sh compose --ansi never --progress plain stop -t 30 $DESKS_STACK_SERVICES'
+TimeoutStopSec=90
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

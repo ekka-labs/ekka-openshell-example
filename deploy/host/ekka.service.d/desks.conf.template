@@ -1,0 +1,19 @@
+# Drop-in for the unit `ekka enclave install-service` generated (/etc/systemd/system/ekka.service).
+# Written by up.sh from this template; the generated unit itself is never edited.
+[Unit]
+# Starting the Enclave starts the desks stack; the stack is bound to the Enclave (ekka-desks.service).
+Wants=ekka-desks.service
+
+[Service]
+# The BASE home, whatever the generator wrote: it writes the environment's state folder (home/staging for staging), and
+# the daemon adds the environment itself, so without this a non-prod service would look in home/staging/staging.
+Environment=EKKA_HOME=@@ENCLAVE_HOME@@
+Environment=EKKA_ENV=@@EKKA_ENV@@
+# The interceptor socket is 0660 of this group; NVIDIA's gateway joins the same group (compose group_add).
+SupplementaryGroups=openshell
+# tmpfiles own /run/ekka (see tmpfiles.d/ekka-desks.conf): the generated RuntimeDirectory= is cleared, or systemd
+# would remove the folder under the gateway's bind mount at every stop.
+RuntimeDirectory=
+# Exactly the three places the daemon writes: its state, the interceptor socket's folder, the adapter socket's folder.
+ReadWritePaths=
+ReadWritePaths=/var/lib/ekka/.ekka /run/ekka /run/ekka-backend

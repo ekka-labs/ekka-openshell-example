@@ -1,0 +1,42 @@
+{
+  "id": "claude-code",
+  "displayName": "Claude Code",
+  "description": "Claude Code CLI",
+  "category": "PROVIDER_PROFILE_CATEGORY_AGENT",
+  "credentials": [
+    {
+      "name": "api_key",
+      "description": "Anthropic API key used by Claude Code",
+      "envVars": [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY"
+      ],
+      "required": true,
+      "authStyle": "header",
+      "headerName": "x-api-key"
+    }
+  ],
+  "endpoints": [
+    {
+      "host": "api.anthropic.com",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_WRITE"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "/usr/bin/claude"
+    },
+    {
+      "path": "/usr/local/bin/claude"
+    }
+  ],
+  "inferenceCapable": true,
+  "discovery": {
+    "credentials": [
+      "api_key"
+    ]
+  }
+}

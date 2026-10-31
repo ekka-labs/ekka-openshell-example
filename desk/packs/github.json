@@ -1,0 +1,93 @@
+{
+  "pack": "github",
+  "about": "Source from GitHub: git clone and fetch, release and raw downloads, the read-only API. Push stays denied.",
+  "rules": {
+    "git": {
+      "why": "git clone and fetch, and cargo's git dependencies; push (git-receive-pack) is not allowed",
+      "endpoints": [
+        {
+          "host": "github.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "rules": [
+            {
+              "allow": {
+                "method": "GET",
+                "path": "**"
+              }
+            },
+            {
+              "allow": {
+                "method": "HEAD",
+                "path": "**"
+              }
+            },
+            {
+              "allow": {
+                "method": "OPTIONS",
+                "path": "**"
+              }
+            },
+            {
+              "allow": {
+                "method": "POST",
+                "path": "/**/git-upload-pack"
+              }
+            }
+          ]
+        }
+      ],
+      "binaries": [
+        "/usr/bin/git",
+        "/usr/lib/git-core/git-remote-http",
+        "/usr/lib/git-core/git-remote-https",
+        "/usr/**/bin/cargo"
+      ]
+    },
+    "downloads": {
+      "why": "source archives, release assets and raw files that builds and installers download",
+      "endpoints": [
+        {
+          "host": "codeload.github.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        },
+        {
+          "host": "*.githubusercontent.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        }
+      ],
+      "binaries": [
+        "/usr/bin/git",
+        "/usr/lib/git-core/git-remote-http",
+        "/usr/lib/git-core/git-remote-https",
+        "/usr/**/bin/cargo",
+        "/usr/**/bin/node",
+        "/usr/bin/curl"
+      ]
+    },
+    "api": {
+      "why": "the GitHub REST API, read only: tags, releases, metadata",
+      "endpoints": [
+        {
+          "host": "api.github.com",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+        }
+      ],
+      "binaries": [
+        "/usr/bin/gh",
+        "/usr/**/bin/node",
+        "/usr/bin/curl"
+      ]
+    }
+  }
+}

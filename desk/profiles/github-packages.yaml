@@ -1,0 +1,25 @@
+# This install's own key profile: private npm packages on GitHub Packages, download only.
+# The key is a GitHub token with read:packages (a classic token: GitHub Packages' npm registry takes no
+# fine-grained token). The desk sees only a stand-in for it in NODE_AUTH_TOKEN; the gateway puts the real
+# key into the request, and only when node sends it to npm.pkg.github.com. A project's .npmrc reads it as:
+#   //npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+# Downloads redirect to *.githubusercontent.com, which the github pack opens, with no key.
+id: github-packages
+display_name: GitHub Packages (npm)
+description: Private npm packages on GitHub Packages, download only
+category: data
+credentials:
+  - name: npm_token
+    description: A GitHub token with read:packages
+    env_vars: [NODE_AUTH_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+endpoints:
+  - host: npm.pkg.github.com
+    port: 443
+    protocol: rest
+    access: read-only
+    enforcement: enforce
+    allow_encoded_slash: true
+binaries: [/usr/**/bin/node]

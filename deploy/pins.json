@@ -1,0 +1,26 @@
+{
+  "openshell": {
+    "version": "0.1.4",
+    "release": "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.4",
+    "gateway": {
+      "image": "ghcr.io/nvidia/openshell/gateway@sha256:bdb4fe248070032c88be78f029dad9325cb698480e90486e1413a674a5d8edc8",
+      "binary_in_image": "/usr/local/bin/openshell-gateway",
+      "release_asset": "openshell-gateway-x86_64-unknown-linux-gnu.tar.gz",
+      "release_checksums": "openshell-gateway-checksums-sha256.txt",
+      "binary_sha256": "b2c1b9db0e4c066458ffe4cdfa0d9e77e32d6250fa9a8b221968b250e854b892"
+    },
+    "supervisor": {
+      "image": "ghcr.io/nvidia/openshell/supervisor@sha256:aa681d8264af6ee860e38349ed3c76609a51778eb6d0f02743df03787b80a290",
+      "binary_in_image": "/openshell-supervisor",
+      "release_asset": "openshell-supervisor-x86_64-unknown-linux-gnu.tar.gz",
+      "release_checksums": "openshell-supervisor-checksums-sha256.txt",
+      "binary_sha256": "edad759d916a05dfa461f1bd9e9a5411afaeba10127778124290553852ee1173"
+    }
+  },
+  "ekka_backend": {
+    "registry": "ghcr.io/ekka-labs",
+    "digest": "sha256:8293b5c867ca8a936c94471dd7bedf7ba6f2a53f64ddab017dd2276836d58c2f",
+    "release_workflow": ".github/workflows/release.yml",
+    "cosign_image": "gcr.io/projectsigstore/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b55be3b07b4032bef715a12122ce5829619aca"
+  }
+}

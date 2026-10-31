@@ -1,0 +1,22 @@
+{
+  "pack": "node",
+  "about": "The public npm registry, download only (npm's audit POST is refused: install with --no-audit).",
+  "rules": {
+    "npm": {
+      "why": "npm and pnpm installs from the public registry; scoped packages need an encoded slash",
+      "endpoints": [
+        {
+          "host": "registry.npmjs.org",
+          "port": 443,
+          "protocol": "rest",
+          "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+          "access": "NETWORK_ACCESS_PRESET_READ_ONLY",
+          "allowEncodedSlash": true
+        }
+      ],
+      "binaries": [
+        "/usr/**/bin/node"
+      ]
+    }
+  }
+}

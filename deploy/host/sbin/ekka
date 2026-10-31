@@ -1,0 +1,43 @@
+#!/bin/bash
+# `ekka` for this server's Enclave: the real binary, as the Enclave's own user and home, with a clean environment.
+# Installed at /usr/local/sbin/ekka by up.sh, so after `sudo -i` every `ekka <command>` reaches this Enclave.
+# Why root first: the Enclave's files belong to the `ekka` user and nobody else may read them; the one step
+# down from root to that user is the whole of this file. The binary at /usr/local/bin/ekka is untouched.
+set -euo pipefail
+# The runner reads its environment selector ANYWHERE in the arguments (`--env <name>`, `--env=<name>`, or a bare
+# `--local`, `--dev`, `--staging`, `--prod`), so `ekka whoami --env staging` would pick another environment as much as
+# `ekka --staging whoami` would. The same six spellings are refused here, in any position.
+for a in "$@"; do
+  case "$a" in
+    --env|--env=*|--local|--dev|--staging|--prod)
+      echo "ekka: this server's Enclave has one environment (EKKA_ENV in /etc/ekka/desks.env); a selector such as $a is refused here" >&2; exit 78 ;;
+  esac
+done
+if [[ $(id -u) != 0 ]]; then
+  echo "ekka: this server's Enclave runs as the ekka user. Run: sudo -i, then: ekka $*" >&2
+  exit 77
+fi
+# Four things only this server's administrator can do, and the runner cannot: a provider's key and the people are set on
+# the desk backend as ITS administrator (the Enclave is not one, by design), and a desk's own plans come from the
+# desks agent's grant. They are typed as `ekka desk …` here and run the installer's verbs from the root-owned snapshot,
+# never a person's checkout. `ekka desk connect` with a provider and a PIPED key sets the key; with a terminal on
+# stdin, or no provider, the binary lists what it knows, as everywhere else.
+SNAPSHOT=@@SNAPSHOT@@
+admin() { exec /usr/bin/bash "$SNAPSHOT/up.sh" "$@"; }
+case "${1:-} ${2:-}" in
+  "desk connect") if (( $# >= 3 )) && [[ ! -t 0 ]]; then admin connect "${@:3}"; fi ;;
+  "desk invite")  admin invite "${@:3}" ;;
+  "desk revoke")  admin revoke "${@:3}" ;;
+  "desk plans")   admin desk-plans "${@:3}" ;;
+  "desk grant")   admin grant "${@:3}" ;;
+  "desk registry") admin registry "${@:3}" ;;
+  "desk image")   admin image "${@:3}" ;;
+esac
+env_file=/etc/ekka/desks.env    # EKKA_ENV, written by up.sh at install; prod when absent
+ekka_env=$(sed -n 's/^EKKA_ENV=//p' "$env_file" 2>/dev/null | head -1 || true)   # absent file: prod
+# A clean environment on purpose: nothing a root shell carries (EKKA_HOME_OVERRIDE, a proxy, a different EKKA_ENV)
+# reaches the binary. The terminal type stays so an interactive session renders.
+exec runuser -u ekka -- /usr/bin/env -i \
+  PATH=/usr/local/bin:/usr/bin:/bin HOME=/var/lib/ekka EKKA_HOME=/var/lib/ekka/.ekka \
+  EKKA_ENV="${ekka_env:-prod}" TERM="${TERM:-dumb}" LANG="${LANG:-C.UTF-8}" \
+  /usr/local/bin/ekka "$@"
