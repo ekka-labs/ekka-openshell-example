@@ -541,7 +541,6 @@ t "a run receipt path is the edge's 404" '^status=404 ' edge_get GET "/ekka/runs
 t "a run session path is the edge's 404: no remote conversation" '^status=404 ' edge_get GET "/ekka/runs/$run_id/session"
 
 not_walked "ekka enclave install-service" "run by up.sh step_start on this machine; regenerating the unit by hand is maintenance, not a walk leg"
-not_walked "ekka job answer" "needs the id of a finished run on this server; the first answer in README.md exercises it"
 
 section "desk administration through EKKA"
 # ADK-G3. Only where the backend adapter runs (the desk-admin profile); elsewhere one

@@ -169,5 +169,5 @@ Rarely needed: desks register themselves. Run these on the machine you installed
 
 ## Related workflow commands
 
-- On the server, as root (`sudo -i`): `ekka job answer <run-id>` shows a run's answer, `ekka receipts show <run-id>` its record. This setup serves no downloads to laptops.
+- On the server, as root (`sudo -i`): `ekka run show --output <run-id>` shows a run's answer, `ekka receipts show <run-id>` its record. This setup serves no downloads to laptops.
 - `ekka agent deny desks --everyone` removes shared permission to run the desks agent's plans. Use it only when you intend to restrict team access.

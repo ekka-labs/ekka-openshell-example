@@ -133,7 +133,7 @@ supported setup.
 
 This setup serves nothing to a laptop from the Enclave's records: no download of an answer or a receipt, no
 remote conversation. Every such read happens on the server, as the administrator: `sudo -i`, then
-`ekka job answer <run>`, `ekka receipts show <run>`, `ekka receipts verify`, or `ekka run attach <run>` for a
+`ekka run show --output <run>`, `ekka receipts show <run>`, `ekka receipts verify`, or `ekka run attach <run>` for a
 running conversation. A laptop's download command against this server is refused by EKKA
 (`FETCH_TICKET_ENCLAVE_NOT_REACHABLE`), because the Enclave reports no download address. The edge therefore
 carries only the sign-in paths; `/ekka/runs/...` answers 404.

@@ -76,7 +76,7 @@ class TheInstaller(unittest.TestCase):
         for doc in ("docs/COMMANDS.md", "docs/OPERATIONS.md", "docs/SERVER.md", "docs/ASK-YOUR-CODE.md", "README.md"):
             text = read(*doc.split("/"))
             self.assertNotRegex(text, r"`ekka run fetch <run[^`]*`\s+downloads", doc)
-        self.assertIn("ekka job answer <run-id>", read("docs", "COMMANDS.md"))
+        self.assertIn("ekka run show --output <run-id>", read("docs", "COMMANDS.md"))
         self.assertIn("No remote door", read("docs", "OPERATIONS.md"))
 
     def test_the_walk_asserts_the_edges_404_on_every_run_path(self):
