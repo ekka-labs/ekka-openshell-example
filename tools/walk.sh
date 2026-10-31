@@ -20,6 +20,8 @@
 #                                       the walk (the leg "who may use the desks" prints how); deleted after it
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=../deploy/lib.sh
+. deploy/lib.sh   # enclave_ekka, enclave_home_file: the native Enclave, as its user
 ROOT=$PWD
 export DESKS_STATE=${DESKS_STATE:-/var/lib/ekka-agent-desks}
 WALK_REPO=${WALK_REPO:-https://github.com/octocat/Hello-World}
@@ -51,7 +53,7 @@ pin_state() {  # what the Enclave last reported for walk-desk: pinned | replaced
   else echo waiting; fi; }
 until_state() {  # until_state <state>: the Enclave checks its desks about once a minute
   for _ in $(seq 1 45); do [[ $(pin_state) == "$1" ]] && return 0; sleep 4; done; return 1; }
-repin() { printf '%s\n' "$DESK" | (cd deploy && bash setup.sh compose exec -T ekka-enclave ekka desk repin "$DESK" 2>&1) | quiet; }
+repin() { printf '%s\n' "$DESK" | enclave_ekka desk repin "$DESK" 2>&1 | quiet; }
 OUT=""; NO_PERSON=""
 t() {  # t <label> <regex> <command...>: passes when the command succeeds and its output matches
   local label=$1 want=$2; shift 2
@@ -215,7 +217,7 @@ old_id=$(python3 tools/desk_admin_checks.py pinned-id "$TMP/desk-before-delete.j
 t "read the old pinned backend identity" '^[A-Za-z0-9_-]+$' printf '%s\n' "$old_id"
 t "governed delete retires the first desk" '.' E desk delete "$DESK" --yes
 t "the old desk record is retained as retired evidence" '^retired$' bash -c \
-  'docker exec ekka-desks-ekka-enclave-1 test -f "/var/lib/ekka/.ekka/desks/.state/retired/$1.$2.json" && echo retired' _ "$DESK" "$old_id"
+  'test -f "/var/lib/ekka/.ekka/desks/.state/retired/$1.$2.json" && echo retired' _ "$DESK" "$old_id"
 t "a second governed create registers a fresh desk under the same name" "$DESK" E desk create "$DESK" --provider claude-code
 t "the new registration becomes pinned" '^pinned$' bash -c "$(declare -f E quiet pin_state until_state); DESK=$DESK; until_state pinned && pin_state"
 E desk show "$DESK" --json > "$TMP/desk-after-create.json"
@@ -335,9 +337,9 @@ section "plans, grants and records"
 agent_id=$(E agent list --json | A=$DESKS_AGENT python3 -c 'import json,sys,os; a=[x["agent_id"] for x in json.load(sys.stdin)["agents"] if x["agent_code"]==os.environ["A"]]; print(a[0] if a else "")' 2>/dev/null)
 # walk-desk gets its own setup and ask plans, from the same templates as code-desk (tools/desk_plans.py).
 python3 tools/desk_plans.py "$DESK" "$TMP" "$agent_id" >/dev/null
-docker cp "$TMP/plan-setup-$DESK.json" ekka-desks-ekka-enclave-1:/tmp/walk-plan.json >/dev/null
+install -d -m 0700 -o ekka -g ekka /var/lib/ekka/.ekka/plans; enclave_home_file plans/walk-plan.json 0600 < "$TMP/plan-setup-$DESK.json"
 covers "ekka plan validate"
-t "validate walk-desk's setup plan" '.' E plan validate /tmp/walk-plan.json
+t "validate walk-desk's setup plan" '.' E plan validate /var/lib/ekka/.ekka/plans/walk-plan.json
 covers "./up.sh desk-plans"; covers "ekka plan create"
 t "walk-desk gets its own setup and ask plans" 'example\.desk\.ask\.walkDesk\.v1' ./up.sh desk-plans "$DESK"
 # Every member may RUN the desks agent's plans; the install opened it (step_agent_open, #161). Read from Govern
@@ -403,8 +405,8 @@ for o in d["definition"]["operations"][0]["steps"][0]["inputs"]["outputs"]:
     if o["kind"] == "answer": o["path"] = ".ekka/walk-never-written.md"
 json.dump(d, open(sys.argv[2], "w"))
 PY
-docker cp "$TMP/walk-noanswer.json" ekka-desks-ekka-enclave-1:/tmp/walk-noanswer.json >/dev/null
-E plan create /tmp/walk-noanswer.json >/dev/null 2>&1 || true
+enclave_home_file plans/walk-noanswer.json 0600 < "$TMP/walk-noanswer.json"
+E plan create /var/lib/ekka/.ekka/plans/walk-noanswer.json >/dev/null 2>&1 || true
 noanswer=$(E plan list | grep -o -E 'ekka\.example\.desk\.walkNoAnswer\.v1@[0-9.]+' | sort -V | tail -1)
 # A pass needs the plan to exist and the RUN to end failed (its run id beside the word), so a run that
 # never started cannot pass this check.
@@ -437,8 +439,8 @@ for o in d["definition"]["operations"][0]["steps"][0]["inputs"]["outputs"]:
     if o["kind"] == "answer": o["path"] = f".ekka/answers/{first}.md"
 json.dump(d, open(sys.argv[2], "w"))
 PY
-docker cp "$TMP/walk-stale.json" ekka-desks-ekka-enclave-1:/tmp/walk-stale.json >/dev/null
-E plan create /tmp/walk-stale.json >/dev/null 2>&1 || true
+enclave_home_file plans/walk-stale.json 0600 < "$TMP/walk-stale.json"
+E plan create /var/lib/ekka/.ekka/plans/walk-stale.json >/dev/null 2>&1 || true
 stale=$(E plan list | grep -o -E 'ekka\.example\.desk\.walkStaleAnswer\.v1@[0-9.]+' | sort -V | tail -1)
 t "a second ask that writes no answer fails, and never shows the first answer" '^refused$' \
   bash -c "[[ -n '$stale' ]] || { echo 'no walkStaleAnswer plan was created'; exit 3; }; $(declare -f E quiet answer_of stale_refused); \
@@ -518,7 +520,7 @@ skip_leg "a governed narrowing that changes the desk" "the shipped grant gives a
 section "on the installed machine"
 covers "ekka desk add"
 desk_file=$(E desk list | grep -o -E '/var/lib/ekka/[^ ]*/desks' | head -1)/$DESK.json
-t "add refuses a desk that is already registered" 'already|exists|registered' bash -c "(cd deploy && bash setup.sh compose exec -T ekka-enclave ekka desk add '$desk_file' 2>&1); true"
+t "add refuses a desk that is already registered" 'already|exists|registered' bash -c "$(declare -f enclave_ekka); ENCLAVE_USER=ekka ENCLAVE_HOME=/var/lib/ekka/.ekka ENCLAVE_BIN=/usr/local/bin/ekka enclave_ekka desk add '$desk_file' 2>&1; true"
 covers "ekka org edition"
 t "the organization is let in and its edition is shown" 'edition' E org edition
 covers "ekka enclave list"
@@ -569,7 +571,7 @@ if desk_admin_on; then
   t "the backend adapter runs healthy, as the Enclave's user, read-only, with no port and no Docker socket" '^ok$' \
     python3 tools/desk_admin_checks.py adapter "$TMP/adapter.json"
   t "the Enclave holds the desks connection" 'desks' E api list
-  (cd deploy && bash setup.sh compose exec -T ekka-enclave ekka gate grant list --json) > "$TMP/grants.json" 2>/dev/null
+  enclave_ekka gate grant list --json > "$TMP/grants.json" 2>/dev/null
   t "one api.write grant on apis/desks, with its limits" '^ok$' python3 tools/desk_admin_checks.py grant "$TMP/grants.json"
   cat > "$TMP/people-scopes.py" <<'PY'
 import json, sys
@@ -612,11 +614,10 @@ PY
   # loses the grant for. Each change is a run with its own sealed receipt. (Who ran it: not on a 0.1.111 receipt.)
   PROBE=walk-probe
   desks_dir=$(E desk list | grep -o -E '/var/lib/ekka/[^ ]*/desks' | head -1)
-  lock_holder_of() { docker exec ekka-desks-ekka-enclave-1 cat "$desks_dir/.state/$1.lock" 2>/dev/null; }
+  lock_holder_of() { cat "$desks_dir/.state/$1.lock" 2>/dev/null; }
   released() {  # no job and no change holds the desk: its state folder is there and its lock is not (a ready or
     # refused release removes the lock; an unknown one keeps it, marked). A lock that cannot be read is never released.
-    [[ -n $desks_dir ]] && docker exec ekka-desks-ekka-enclave-1 sh -c \
-      'test -d "$1/.state" && test ! -e "$1/.state/$2.lock"' _ "$desks_dir" "$1" && echo released
+    [[ -n $desks_dir ]] && test -d "$desks_dir/.state" && test ! -e "$desks_dir/.state/$1.lock" && echo released
   }
   desk_containers() {  # the desk's containers as settle sees them, by OpenShell's labels: [[id, state, sandbox id]]
     python3 -c 'import json, sys; sys.path.insert(0, "tools"); import desks_settle as d; print(json.dumps(d.containers(sys.argv[1])))' "$1"
@@ -646,7 +647,7 @@ PY
   judged "status reads the desk through EKKA: ready, no change running" outcome ready E desk status "$PROBE"
   # Step 6: with no grant, a desk change is refused at dispatch. The grant comes back as an install restores it:
   # up.sh run again grants from the same limits file E4 wrote, kept byte for byte.
-  (cd deploy && bash setup.sh compose exec -T ekka-enclave ekka gate grant list --json) > "$TMP/grants-before.json" 2>/dev/null
+  enclave_ekka gate grant list --json > "$TMP/grants-before.json" 2>/dev/null
   gid=$(python3 tools/desk_admin_checks.py grant-id "$TMP/grants-before.json" | head -1)
   cp "$DESKS_STATE/backend/desks-grant.json" "$TMP/desks-grant.before.json" 2>/dev/null
   if [[ $gid =~ ^[A-Za-z0-9_-]+$ && -s $TMP/desks-grant.before.json ]]; then
@@ -662,7 +663,7 @@ PY
       printf "  ${r}FAIL${n}  step 6: no same-run grant-refusal diagnostics\n"
     fi
     t "step 6: up.sh run again restores the grant" 'desks grant|administer desks' up_again
-    (cd deploy && bash setup.sh compose exec -T ekka-enclave ekka gate grant list --json) > "$TMP/grants-after.json" 2>/dev/null
+    enclave_ekka gate grant list --json > "$TMP/grants-after.json" 2>/dev/null
     t "step 6: one desks grant again, with its limits" '^ok$' python3 tools/desk_admin_checks.py grant "$TMP/grants-after.json"
     t "step 6: from the same limits file" '^same$' bash -c "cmp -s '$TMP/desks-grant.before.json' '$DESKS_STATE/backend/desks-grant.json' && echo same"
   else FAIL=$((FAIL+1)); FAILED+=("step 6: no single desks grant to revoke, or no limits file to restore it from")

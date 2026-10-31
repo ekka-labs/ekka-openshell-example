@@ -6,7 +6,7 @@
 #                                            and the customer's first administrator (password typed, no echo)
 #   setup.sh enroll                          PRINTS the enrollment steps: they need a person's EKKA sign-in
 #   setup.sh people-scopes                   people's desk sign-ins read-only on a running install (up.sh, every run)
-#   setup.sh enclave-config <env> <workspace>  the Enclave's OpenShell keys, issuer mode, in its enclave.env
+#   setup.sh enclave-config <env> <workspace>  the Enclave's OpenShell keys, issuer mode, in its enclave.env (native home)
 #   setup.sh enclave-secret <env>            the Enclave client's secret, piped from Keycloak into the vault
 #   setup.sh people                          the bundle each person runs once: the desks CA and backend.json
 #   setup.sh supervisor                      the desks' supervisor binary from the pinned image (again after a pin bump)
@@ -18,11 +18,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 HERE=$PWD; ROOT=$(cd .. && pwd)
-HOMEVOL=ekka-desks_ekka-home                    # compose.yml: name ekka-desks, volume ekka-home
 ALPINE=alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 export DESKS_STATE=${DESKS_STATE:-/var/lib/ekka-agent-desks}
 P="docker compose -f compose.yml"; [[ -f $DESKS_STATE/up.env ]] && P="$P --env-file $DESKS_STATE/up.env"   # up.sh: binds, versions, telemetry
 T=$DESKS_STATE/tls
+# shellcheck source=lib.sh
+. "$HERE/lib.sh"                                 # enclave_ekka: the ONE way to call this server's native Enclave
 die() { echo "setup: $*" >&2; exit 1; }
 say() { echo "setup: $*"; }
 pins() { python3 -c "import json,sys; p=json.load(open('$ROOT/deploy/pins.json'))['openshell']; print(p$1)"; }
@@ -30,7 +31,7 @@ kc_env() {
   export KC_URL=https://127.0.0.1:8443 KC_CA=$T/ca.crt KC_ADMIN_USER=desks-bootstrap
   export KC_ADMIN_PASSWORD_FILE=$DESKS_STATE/secrets/keycloak-admin-password
 }
-ekka_run() { $P run --rm -T --no-deps --entrypoint /usr/local/bin/ekka -e EKKA_ENV="$1" ekka-enclave "${@:2}"; }
+ekka_run() { EKKA_ENV="$1" enclave_ekka "${@:2}"; }   # as the Enclave's user, with its home and environment
 
 # The supervisor binary every desk runs, from the pinned image, checked against the committed sha256. Run again
 # after a pin bump: the gateway does not start with a supervisor that is not the pinned one (tools/gateway_preflight.py).
@@ -82,32 +83,6 @@ compose_starts() {
   [[ ,${COMPOSE_PROFILES:-}, == *,desk-admin,* ]] && always=--always
   backend_preflight $always
   gateway_preflight
-}
-
-# Only this kit's old service address is migrated. Enrollment and every other key stay private in the volume.
-stage_loopback_config() {
-  local env=${EKKA_ENV:-prod} envdir; envdir=$env; [[ $env == prod ]] && envdir=.
-  docker run --rm --network none -v "$HOMEVOL:/h" -v "$HERE/migrate-loopback.sh:/migrate:ro" "$ALPINE" \
-    sh /migrate "/h/$envdir/enclave.env"
-}
-
-# A network-namespace owner restarted outside Compose can leave the gateway in its old namespace.
-# This checks connectivity only; the executor still verifies TLS, OIDC and the pinned gateway identity.
-stage_loopback_check() {
-  $P --env-file "$DESKS_STATE/desks.env" exec -T ekka-enclave sh -c 'nc -z -w 3 127.0.0.1 8080 < /dev/null' \
-    || die "gateway loopback is unavailable; repair the whole stack with sudo ./up.sh server <name> (or the original local command)"
-}
-
-# IDs alone do not detect a direct Engine restart: the owner can keep its ID
-# while entering a new namespace, so require actual loopback connectivity too.
-stage_loopback_current() {
-  local enclave gateway mode
-  enclave=$($P --env-file "$DESKS_STATE/desks.env" ps -q ekka-enclave) || return 1
-  gateway=$($P --env-file "$DESKS_STATE/desks.env" ps -q gateway) || return 1
-  [[ -n $enclave && -n $gateway ]] || return 1
-  mode=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$gateway") || return 1
-  [[ $mode == "container:$enclave" ]] || return 1
-  stage_loopback_check
 }
 
 # People's sign-ins are read-only (ADK-E2), on an install that already runs too. `init` runs once, so an
@@ -171,9 +146,9 @@ stage_enroll() {
   cat <<EOF
 Enrollment needs a person's EKKA sign-in; run these with them:
   1. a signed-in person, on any computer:      ekka enclave create --name "desks $(hostname)"   -> prints an id
-  2. here, the Enclave's own home:              cd $HERE && EKKA_ENV=<env> $P run --rm --entrypoint /usr/local/bin/ekka ekka-enclave login --email <them>
-  3. no keychain in a container:              ... ekka-enclave enclave custody file
-  4. claim this machine with that id:         ... ekka-enclave enclave start <id>     (Ctrl-C once it is running)
+  2. here, as the Enclave's user:             sudo -i; then EKKA_ENV=<env> ekka login --email <them>   (the wrapper runs it as ekka)
+  3. claim this machine with that id:         ekka enclave start <id> --custody file     (Ctrl-C once it is running)
+     then make it a service:                  ekka enclave install-service
   5. an administrator makes the Enclave a USER member of the desk workspace (not admin), e.g.
        openshell workspace create --name <workspace>
        openshell workspace member add --workspace <workspace> --subject <ekka-enclave's OIDC sub> --role user
@@ -203,7 +178,7 @@ EKKA_OPENSHELL_INTERCEPTOR_SOCKET_MODE=0660
 EKKA_OPENSHELL_INTERCEPTOR_GROUP=openshell
 EKKA_OPENSHELL_EXECUTOR_URL=https://127.0.0.1:8080
 EKKA_OPENSHELL_EXECUTOR_TLS_DOMAIN=$DESKS_NAME
-EKKA_OPENSHELL_EXECUTOR_CA_PEM_PATH=/tls/ca.crt
+EKKA_OPENSHELL_EXECUTOR_CA_PEM_PATH=/etc/ekka/desks-ca.crt
 EKKA_OPENSHELL_EXECUTOR_WORKSPACE=$ws
 EKKA_OPENSHELL_EXECUTOR_SUBJECT=user:oidc:$subj
 EKKA_OPENSHELL_EXECUTOR_ISSUER=https://$DESKS_NAME/realms/ekka-desks
@@ -212,11 +187,14 @@ EKKA_OPENSHELL_EXECUTOR_CLIENT_SECRET_NAME=OPENSHELL_EXECUTOR_CLIENT_SECRET
 EKKA_DESKS_AUTO=true
 EOF
   # merged into the Enclave's ONE config file, keeping every key the enrollment wrote. Prod keeps its files at the
-  # top of the Enclave's home; every other environment in a folder named after it.
+  # top of the Enclave's home; every other environment in a folder named after it. Written whole, as the Enclave's
+  # user, 0600: the daemon reads this file directly and refuses one another user owns.
   local envdir=$env; [[ $env == prod ]] && envdir=.
-  docker run --rm -i -v "$HOMEVOL:/h" -v "$f:/new:ro" "$ALPINE" sh -eu -c "
-    F=/h/$envdir/enclave.env; test -f \$F || { echo 'no enclave.env for $env: enroll first'; exit 1; }
-    cp -p \$F \$F.before-desks; grep -v -E '^EKKA_OPENSHELL_' \$F.before-desks > \$F; cat /new >> \$F; chown 2000:1000 \$F; chmod 0600 \$F"
+  local F=$ENCLAVE_HOME/$envdir/enclave.env
+  [[ -f $F ]] || { rm -f "$f"; die "no enclave.env for $env at $F: enroll first"; }
+  [[ -L $F ]] && { rm -f "$f"; die "$F is a link; the Enclave keeps a real file there"; }
+  cp -p "$F" "$F.before-desks"
+  { grep -v -E '^EKKA_OPENSHELL_' "$F.before-desks"; cat "$f"; } | enclave_home_file "$envdir/enclave.env" 0600
   rm -f "$f"
   say "enclave.env ($env): the OpenShell keys written, issuer mode; the old file kept as enclave.env.before-desks"
 }
@@ -346,9 +324,6 @@ case "${1:-}" in
   enclave-subject) stage_enclave_subject ;;
   people) stage_people ;;
   supervisor) stage_supervisor ;;
-  loopback-config) stage_loopback_config ;;
-  loopback-check) stage_loopback_check ;;
-  loopback-current) stage_loopback_current ;;
   preflight) gateway_preflight ;;
   backend-preflight) backend_preflight "${@:2}" ;;
   people-scopes) stage_people_scopes ;;

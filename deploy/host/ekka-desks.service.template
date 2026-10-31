@@ -1,0 +1,29 @@
+# The desks stack (sign-in, edge, NVIDIA's gateway, the backend adapter), supervised by systemd and BOUND to the
+# Enclave: it stops when the Enclave stops or fails, and starts when the Enclave starts (the Enclave's drop-in Wants
+# it). Compose runs in the FOREGROUND, so a container that exits ends this unit and systemd restarts it; `restart:`
+# policies in compose.yml are "no" on purpose. Written by up.sh from this template into /etc/systemd/system/.
+# It runs from a ROOT-OWNED snapshot of deploy/ (@@SNAPSHOT@@), never from a person's checkout.
+[Unit]
+Description=EKKA desks stack (gateway, sign-in, edge, adapter)
+BindsTo=ekka.service
+After=ekka.service docker.service network-online.target
+Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@@SNAPSHOT@@/deploy
+Environment=DESKS_STATE=@@DESKS_STATE@@
+# No gateway before the Enclave's interceptor socket answers: fail closed, by a real connect, not a file test.
+ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock 60
+# One-shot folders first (the gateway's and the adapter's state, owned by their users), run to completion.
+ExecStartPre=/usr/bin/bash setup.sh compose up gateway-init backend-init
+ExecStart=/usr/bin/bash setup.sh compose up --no-deps --abort-on-container-exit --no-log-prefix keycloak-db keycloak edge gateway ekka-backend
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

@@ -40,7 +40,8 @@ import time
 
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 DESK = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
-ENCLAVE = "ekka-desks-ekka-enclave-1"
+ENCLAVE_USER = "ekka"            # the native Enclave's user; its home is below
+ENCLAVE_HOME = "/var/lib/ekka/.ekka"
 GATEWAY = "ekka-desks-gateway-1"
 STATE_VOLUME = "ekka-desks_ekka-backend-state"
 # The one-shot writer: the alpine image compose.yml already pins (gateway-init), never a tag.
@@ -63,6 +64,15 @@ class Refused(Exception):
 def docker(args, stdin=None):
     r = subprocess.run(["docker", *args], input=stdin, capture_output=True, text=True,
                        stdin=None if stdin is not None else subprocess.DEVNULL)
+    return r.returncode, r.stdout
+
+
+def enclave_ekka(args):
+    """The ekka command as the native Enclave's user, with its home and a clean environment (deploy/lib.sh)."""
+    env = os.environ.get("EKKA_ENV", "prod")
+    r = subprocess.run(["runuser", "-u", ENCLAVE_USER, "--", "/usr/bin/env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin",
+                        "HOME=/var/lib/ekka", f"EKKA_HOME={ENCLAVE_HOME}", f"EKKA_ENV={env}", "LANG=C.UTF-8",
+                        "/usr/local/bin/ekka", *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     return r.returncode, r.stdout
 
 
@@ -306,15 +316,18 @@ def main(argv, run=docker):
         # The desk name is checked before it is part of any path.
         if not DESK.match(desk):
             raise Refused(f"'{desk}' is not a desk name")
-        rc, listing = run(["exec", ENCLAVE, "ekka", "desk", "list"])
+        rc, listing = enclave_ekka(["desk", "list"])
         m = re.search(r"/var/lib/ekka/\S*/desks", listing) if rc == 0 else None
         if not m:
             raise Refused("the Enclave did not name its desks folder; is it running?")
         lock_path = f"{m.group(0)}/.state/{desk}.lock"
 
         def read_lock():
-            rc, text = run(["exec", ENCLAVE, "cat", lock_path])
-            return text if rc == 0 else ""
+            try:
+                with open(lock_path, encoding="utf-8") as f:   # the Enclave's folder, read as root
+                    return f.read()
+            except OSError:
+                return ""
 
         state = os.environ.get("DESKS_STATE", "/var/lib/ekka-agent-desks")
         # The gateway's identity as the adapter itself has it, read before anything is held or restarted.

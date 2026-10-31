@@ -1,0 +1,20 @@
+#!/bin/bash
+# wait-interceptor <socket path> <seconds>: succeed once something ANSWERS on the Enclave's interceptor socket
+# (a real connect, not a file test: a stale socket file connects refused). Used by ekka-desks.service before the
+# gateway starts, so a gateway never runs without the Enclave that checks its calls.
+set -euo pipefail
+sock=${1:?socket path}; secs=${2:-60}
+for ((i = 0; i < secs; i++)); do
+  if python3 - "$sock" <<'PY' 2>/dev/null; then exit 0; fi
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(1)
+try:
+    s.connect(sys.argv[1])
+except OSError:
+    sys.exit(1)
+sys.exit(0)
+PY
+  sleep 1
+done
+echo "wait-interceptor: nothing answers on $sock after ${secs}s; is the Enclave running? journalctl -u ekka" >&2
+exit 1

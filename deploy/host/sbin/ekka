@@ -1,0 +1,18 @@
+#!/bin/bash
+# `ekka` for this server's Enclave: the real binary, as the Enclave's own user and home, with a clean environment.
+# Installed at /usr/local/sbin/ekka by up.sh, so after `sudo -i` every `ekka <command>` reaches this Enclave.
+# Why root first: the Enclave's files belong to the `ekka` user and nobody else may read them; the one step
+# down from root to that user is the whole of this file. The binary at /usr/local/bin/ekka is untouched.
+set -euo pipefail
+if [[ $(id -u) != 0 ]]; then
+  echo "ekka: this server's Enclave runs as the ekka user. Run: sudo -i, then: ekka $*" >&2
+  exit 77
+fi
+env_file=/etc/ekka/desks.env    # EKKA_ENV, written by up.sh at install; prod when absent
+ekka_env=$(sed -n 's/^EKKA_ENV=//p' "$env_file" 2>/dev/null | head -1)
+# A clean environment on purpose: nothing a root shell carries (EKKA_HOME_OVERRIDE, a proxy, a different EKKA_ENV)
+# reaches the binary. The terminal type stays so an interactive session renders.
+exec runuser -u ekka -- /usr/bin/env -i \
+  PATH=/usr/local/bin:/usr/bin:/bin HOME=/var/lib/ekka EKKA_HOME=/var/lib/ekka/.ekka \
+  EKKA_ENV="${ekka_env:-prod}" TERM="${TERM:-dumb}" LANG="${LANG:-C.UTF-8}" \
+  /usr/local/bin/ekka "$@"

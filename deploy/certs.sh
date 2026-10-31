@@ -76,6 +76,12 @@ case "${1:-}" in
     bash "${BASH_SOURCE[0]}" check
     ;;
   bundle)
+    # The native Enclave trusts the gateway and the issuer through a root-owned, world-readable COPY of the CA at
+    # /etc/ekka/desks-ca.crt (its unit sees nothing under $STATE). Replaced whole, so a rotation is atomic.
+    if [[ -f $T/ca.crt ]]; then
+      install -d -m 0755 /etc/ekka
+      install -m 0644 -o root -g root "$T/ca.crt" /etc/ekka/desks-ca.crt.new && mv -f /etc/ekka/desks-ca.crt.new /etc/ekka/desks-ca.crt
+    fi
     # The gateway's TLS trust: the system's public roots AND the desks CA. Trusting only the desks CA
     # (SSL_CERT_FILE=/tls/ca.crt) made every public host untrusted to the gateway's own clients, so a
     # gateway-refreshed provider (AWS STS, OAuth token grants) failed with "dispatch failure".

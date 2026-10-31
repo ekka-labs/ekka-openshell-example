@@ -5,7 +5,8 @@
 #   backup.sh restore <folder>    this setup back from one such folder, onto this machine
 #
 # What is in a backup: Keycloak's database (pg_dump), the gateway's database volume, the Enclave's home
-# (vault, desk files, attempt journal) and $DESKS_STATE (certificates, secrets, gateway.toml, desks.env).
+# /var/lib/ekka/.ekka (vault, desk files, attempt journal; the native Enclave's, owned by the ekka user) and
+# $DESKS_STATE (certificates, secrets, gateway.toml, desks.env).
 # Desk workspaces are NOT backed up: they are working state.
 # A backup is a SECRET: the Enclave's home holds its vault AND, with custody "file", the vault's unlock key.
 set -euo pipefail
@@ -34,19 +35,15 @@ case "${1:-}" in
     install -d -m 0700 "$root" "$d"
     say "Keycloak's database"
     P exec -T keycloak-db pg_dump -U keycloak -d keycloak --format=custom > "$d/keycloak.pgdump"
-    was=$(P ps --services --status running 2>/dev/null | grep -xE 'ekka-enclave|gateway' || true)
-    say "stopping the gateway, then the Enclave (reverse start order), to copy their state consistently"
-    P stop gateway ekka-enclave >/dev/null 2>&1 || true
+    was=""; systemctl is-active --quiet ekka 2>/dev/null && was=ekka
+    say "stopping the desks stack, then the Enclave (reverse start order), to copy their state consistently"
+    systemctl stop ekka-desks ekka >/dev/null 2>&1 || true   # ekka-desks is bound to ekka; both named so the order is explicit
     vol gateway-state "$d" "tar -C /v -czf /b/gateway-state.tgz ."
-    vol ekka-home "$d" "tar -C /v -czf /b/ekka-home.tgz ."
+    tar -C /var/lib/ekka -czpf "$d/ekka-home.tgz" .ekka   # owners and modes kept: the Enclave refuses files another user owns
     if [[ -n $was ]]; then   # only what was running before: an unenrolled Enclave is not started here
-      say "starting again: $(echo "$was" | tr '\n' ' ')"
-      if [[ $was == *gateway* ]] && ! preflight; then
-        say "the gateway preflight refused (above): starting only the Enclave; the backup itself is complete"
-        was=$(echo "$was" | grep -vx gateway || true)
-      fi
-      # shellcheck disable=SC2086
-      [[ -z $was ]] || P up -d $was >/dev/null 2>&1 || say "a service did not start; see: setup.sh compose ps"
+      say "starting again: the Enclave, and the desks stack it wants"
+      preflight || say "the gateway preflight refused (above): the stack will not start the gateway; the backup itself is complete"
+      systemctl start ekka >/dev/null 2>&1 || say "the Enclave did not start; see: journalctl -u ekka"
     fi
     tar -C "$DESKS_STATE" --exclude=./backups -czf "$d/desks-state.tgz" .
     ( cd "$d" && sha256sum ./*.tgz ./*.pgdump > SHA256SUMS )
@@ -56,26 +53,28 @@ case "${1:-}" in
   restore)
     d=${2:-}; [[ -d $d && -f $d/SHA256SUMS ]] || die "usage: restore <a folder this script wrote>"
     ( cd "$d" && sha256sum -c --quiet SHA256SUMS ) || die "the backup does not match its SHA256SUMS; nothing restored"
-    say "stopping this setup (data volumes are replaced, the images stay)"
+    say "stopping this setup (the Enclave's home and the data volumes are replaced, the images stay)"
+    systemctl stop ekka-desks ekka >/dev/null 2>&1 || true
     P down >/dev/null 2>&1 || true
     tar -C "$DESKS_STATE" -xzf "$d/desks-state.tgz"
-    for v in gateway-state ekka-home; do
-      docker volume rm -f "ekka-desks_$v" >/dev/null; docker volume create "ekka-desks_$v" >/dev/null
-      vol "$v" "$d" "tar -C /v -xzpf /b/$v.tgz"
-    done
+    docker volume rm -f ekka-desks_gateway-state >/dev/null; docker volume create ekka-desks_gateway-state >/dev/null
+    vol gateway-state "$d" "tar -C /v -xzpf /b/gateway-state.tgz"
+    rm -rf /var/lib/ekka/.ekka.restoring && mkdir -m 0700 /var/lib/ekka/.ekka.restoring
+    tar -C /var/lib/ekka/.ekka.restoring -xzpf "$d/ekka-home.tgz" --strip-components=1
+    rm -rf /var/lib/ekka/.ekka && mv /var/lib/ekka/.ekka.restoring /var/lib/ekka/.ekka && chown -R ekka:ekka /var/lib/ekka/.ekka
     docker volume rm -f ekka-desks_keycloak-db >/dev/null
     P up -d keycloak-db >/dev/null
     for _ in $(seq 1 30); do P exec -T keycloak-db pg_isready -U keycloak -d keycloak >/dev/null 2>&1 && break; sleep 2; done
     P exec -T keycloak-db pg_restore -U keycloak -d keycloak --clean --if-exists --no-owner < "$d/keycloak.pgdump"
-    P up -d keycloak edge >/dev/null
-    if vol ekka-home "$d" "ls /v/*/enclave.env" >/dev/null 2>&1; then
+    P stop keycloak-db >/dev/null 2>&1 || true   # the stack's unit starts it again below
+    if ls /var/lib/ekka/.ekka/enclave.env /var/lib/ekka/.ekka/*/enclave.env >/dev/null 2>&1; then
       preflight || die "the gateway preflight refused the restored setup (above); the data is restored, nothing else started"
-      say "the restored home holds an enrolled Enclave: starting the Enclave, then the gateway"
-      P up -d >/dev/null
+      say "the restored home holds an enrolled Enclave: starting the Enclave, and the desks stack it wants"
+      systemctl start ekka >/dev/null 2>&1 || die "the Enclave did not start; see: journalctl -u ekka"
     else
-      say "the restored home has no enrolled Enclave: the identity stack is up; enroll, then setup.sh compose up -d"
+      say "the restored home has no enrolled Enclave: enroll (sudo ./up.sh server <name>), which starts the stack"
     fi
-    say "restored from $d; check: setup.sh compose ps; deploy/keycloak/apply_realm.py apply (says nothing to do)"
+    say "restored from $d; check: sudo ./up.sh status; deploy/keycloak/apply_realm.py apply (says nothing to do)"
     ;;
   *) sed -n '2,11p' "$0"; exit 2 ;;
 esac

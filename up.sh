@@ -8,7 +8,8 @@
 #   sudo ./up.sh invite <user> <email> one more person who uses desks: a sign-in and a place in the desk workspace
 #   sudo ./up.sh revoke <user>         that person taken off: sign-in disabled, signed out, out of the desk workspace
 #   sudo ./up.sh desk-plans <desk>     the setup and ask plans for one more desk (code-desk has them from the install)
-#   sudo ./up.sh ekka <command>        the ekka CLI of this machine's Enclave, e.g. sudo ./up.sh ekka plan list
+#   sudo -i, then ekka <command>       this machine's Enclave, as its own user (the installed /usr/local/sbin/ekka);
+#                                      `sudo ./up.sh ekka <command>` is the same call for scripts
 #   <key> | sudo ./up.sh connect <provider>  set a provider's key on this machine, read from stdin only
 #   sudo ./up.sh openshell <command>   NVIDIA's openshell CLI as the gateway's administrator, e.g. sudo ./up.sh openshell provider list
 #   sudo ./up.sh walk                  run every documented command against this installation, and check each
@@ -32,6 +33,9 @@
 #                                        set it on a cloud machine behind NAT, such as its Elastic IP on AWS)
 set -euo pipefail
 cd "$(dirname "$0")"; ROOT=$PWD
+# shellcheck source=deploy/lib.sh
+. deploy/lib.sh                      # enclave_ekka, ENCLAVE_HOME: the one way scripts reach the native Enclave
+SNAPSHOT=/usr/local/lib/ekka-desks   # root-owned copy of deploy/ and tools/ the supervisor unit runs from
 export DESKS_STATE=${DESKS_STATE:-/var/lib/ekka-agent-desks}
 # A folder-mode rerun must keep this installation's environment and release, not reset them.
 EKKA_VERSION=${EKKA_VERSION:-$(python3 tools/workspace_policy.py retained "$DESKS_STATE" EKKA_VERSION 0.1.124)}
@@ -80,7 +84,10 @@ step_preflight() {
   [[ $(uname -s) == Linux ]] || die "desks run on Linux (NVIDIA OpenShell's sandbox needs Linux Landlock)"
   [[ $(id -u) == 0 ]] || die "run with sudo: setup gives each key to the one user that reads it"
   [[ $(uname -m) == x86_64 ]] || die "tested on x86_64 only so far"
-  for t in curl python3 openssl sha256sum; do command -v $t >/dev/null || die "$t is missing"; done
+  for t in curl python3 openssl sha256sum runuser systemctl; do command -v $t >/dev/null || die "$t is missing"; done
+  [[ -d /run/systemd/system ]] || die "systemd is not running this machine; the Enclave runs as a systemd service"
+  command -v cosign >/dev/null || die "cosign is missing: the EKKA installer checks the release signature with it. Install it first:
+  sudo curl -fsSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && sudo chmod +x /usr/local/bin/cosign"
   local abi; abi=$(landlock_abi)
   (( abi >= 3 )) || die "the kernel's Landlock ABI is $abi; NVIDIA OpenShell needs 3 or newer (Linux 6.2+). On Amazon Linux 2023, install kernel6.18 and reboot"
   ok "Linux $(uname -r), Landlock ABI $abi"
@@ -104,6 +111,33 @@ release_gate() {  # the Enclave release must run desk changes through EKKA; this
   ok "EKKA $EKKA_VERSION runs desk changes through EKKA (needs $DESK_ADMIN_MIN_EKKA or newer)"
 }
 
+step_host_accounts() {  # the Enclave's user and the shared group, made by systemd from deploy/host; refused by name when unsafe
+  say "the Enclave's account"
+  local uid name
+  if uid=$(id -u ekka 2>/dev/null); then
+    [[ $uid == 2000 ]] || die "a user 'ekka' exists with uid $uid, not 2000; this setup's Enclave runs as uid 2000. Remove or rename it first"
+  fi
+  if name=$(getent passwd 2000 | cut -d: -f1) && [[ -n $name && $name != ekka ]]; then
+    die "uid 2000 belongs to '$name', not 'ekka'; this setup's Enclave runs as uid 2000. Move that account first"
+  fi
+  local g; for g in docker sudo; do
+    id -nG ekka 2>/dev/null | tr ' ' '\n' | grep -qx "$g" && die "the 'ekka' user is in group '$g'; the Enclave never holds Docker or sudo. Remove it from '$g' first"
+  done
+  local ogid; if ogid=$(getent group openshell | cut -d: -f3) && [[ -n $ogid && $ogid == 1000 ]]; then
+    die "group 'openshell' has gid 1000, the first person's gid on Ubuntu; it must be its own group. Remove it and run again"
+  fi
+  install -m 0644 -o root -g root deploy/host/sysusers.d/ekka-desks.conf /etc/sysusers.d/ekka-desks.conf
+  install -m 0644 -o root -g root deploy/host/tmpfiles.d/ekka-desks.conf /etc/tmpfiles.d/ekka-desks.conf
+  systemd-sysusers ekka-desks.conf >/dev/null || die "systemd-sysusers could not make the ekka user and the openshell group"
+  systemd-tmpfiles --create ekka-desks.conf >/dev/null || die "systemd-tmpfiles could not make the Enclave's folders"
+  [[ $(id -u ekka) == 2000 ]] || die "the ekka user is not uid 2000 after systemd-sysusers"
+  getent group openshell >/dev/null || die "the openshell group is missing after systemd-sysusers"
+  [[ $(stat -c '%U:%G %a' /var/lib/ekka/.ekka) == "ekka:ekka 700" ]] || die "/var/lib/ekka/.ekka is not ekka:ekka 0700"
+  [[ $(stat -c '%U:%G %a' /run/ekka) == "ekka:openshell 750" ]] || die "/run/ekka is not ekka:openshell 0750"
+  id -nG ubuntu 2>/dev/null | tr ' ' '\n' | grep -qx openshell && die "the 'ubuntu' user is in group 'openshell': it could reach the Enclave's interceptor socket. Remove it from the group"
+  ok "user ekka (uid 2000), group openshell (gid $(getent group openshell | cut -d: -f3)), folders /var/lib/ekka/.ekka, /run/ekka, /run/ekka-backend"
+}
+
 step_settings() {
   install -d -m 0755 "$DESKS_STATE"
   local bind=0.0.0.0
@@ -122,6 +156,10 @@ step_settings() {
   # Read by deploy/setup.sh and by every compose call through `setup.sh compose`.
   { echo "DESKS_NAME=$NAME"; echo "DESKS_EDGE_BIND=$bind"; echo "DESKS_GATEWAY_BIND=$bind"
     echo "DESKS_DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
+    echo "DESKS_OPENSHELL_GID=$(getent group openshell | cut -d: -f3)"   # compose group_add: the gateway reaches the interceptor socket
+    # The long-lived services ekka-desks.service runs in the foreground; the adapter joins once desk administration is on.
+    if [[ -f $DESKS_STATE/backend/config.json ]]; then echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway ekka-backend"
+    else echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway"; fi
     echo "EKKA_VERSION=$EKKA_VERSION"; echo "EKKA_ENV=${EKKA_ENV:-prod}"
     # The backend adapter (ADK-E1) is on only once its configuration exists. step_desk_admin writes it after this
     # machine is enrolled; turned on before that, the first `up` would start the adapter on a missing file
@@ -132,6 +170,11 @@ step_settings() {
     echo "DESKS_ADDRESS=$addr"
     [[ $OPENSHELL_TELEMETRY == on ]] && echo "OPENSHELL_TELEMETRY_ENABLED=true" || echo "OPENSHELL_TELEMETRY_ENABLED=false"
   } > "$DESKS_STATE/up.env"
+  # The native Enclave and the installed `ekka` wrapper read the environment here; root-owned, no secret in it.
+  install -d -m 0755 /etc/ekka
+  printf 'EKKA_ENV=%s\n' "${EKKA_ENV:-prod}" > /etc/ekka/desks.env.new && chmod 0644 /etc/ekka/desks.env.new && mv -f /etc/ekka/desks.env.new /etc/ekka/desks.env
+  # The Enclave reaches the issuer and the gateway by this machine's public name, through the edge on this machine.
+  grep -q " $NAME\$" /etc/hosts 2>/dev/null || getent hosts "$NAME" >/dev/null || echo "127.0.0.1 $NAME" >> /etc/hosts
   ok "$MODE: $NAME, listening on $bind; NVIDIA OpenShell telemetry $OPENSHELL_TELEMETRY"
   [[ -f $DESKS_STATE/backend/config.json ]] \
     || echo "   the backend adapter starts once its configuration is written, after this machine is enrolled"
@@ -147,7 +190,7 @@ step_workspace_policy() {
 
 step_workspace_restart() {
   if [[ -f $DESKS_STATE/workspace-policy.pending ]]; then
-    (cd deploy && bash setup.sh compose up -d --no-deps --force-recreate gateway) \
+    (cd deploy && bash setup.sh compose restart gateway) \
       || die 'the gateway could not reload its folder settings; see: sudo ./up.sh status'
     ok 'gateway restarted with the selected folder settings'
     rm -- "$DESKS_STATE/workspace-policy.pending"
@@ -186,11 +229,30 @@ step_images() {
       || die "the desk image did not build: docker build -t ekka-desk:local external/desk-base/desk/image"
     ok "built the desk image on this machine (ekka-desk:local, $src); a desk made before keeps its image until it is made again"
   else ok "desk image ekka-desk:local ($src)"; fi
-  if ! docker image inspect "ekka-agent-desks-enclave:$EKKA_VERSION" >/dev/null 2>&1; then
-    (cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" build ekka-enclave >"$DESKS_STATE/enclave-build.log" 2>&1) \
-      || die "the Enclave image did not build; see $DESKS_STATE/enclave-build.log"
-    ok "built the Enclave from EKKA's signed $EKKA_VERSION release (signature checked)"
-  else ok "Enclave image $EKKA_VERSION"; fi
+}
+
+step_enclave_install() {  # the signed EKKA release on this machine, through EKKA's own installer, cosign REQUIRED
+  say "the EKKA release"
+  local have="" want=$EKKA_VERSION
+  [[ -x /usr/local/bin/ekka ]] && have=$(/usr/local/bin/ekka --version 2>/dev/null | awk '{print $2}' || true)
+  if [[ $have == "$want" ]]; then ok "ekka $want at /usr/local/bin/ekka"
+  else
+    local t; t=$(mktemp -d)
+    curl -fsSL https://get.ekka.ai/install.sh -o "$t/install.sh" || { rm -rf "$t"; die "could not download EKKA's installer"; }
+    curl -fsSL https://get.ekka.ai/install.sh.sha256 -o "$t/install.sh.sha256" || { rm -rf "$t"; die "could not download the installer's checksum"; }
+    (cd "$t" && sed 's#  .*#  install.sh#' install.sh.sha256 | sha256sum -c - >/dev/null 2>&1) || { rm -rf "$t"; die "EKKA's installer does not match its published checksum; nothing installed"; }
+    [[ -n $have ]] && cp -p /usr/local/bin/ekka "/usr/local/bin/ekka.before-$have"
+    # A controlled PATH so nothing shadows /usr/local/bin (the wrapper lives in /usr/local/sbin, not on this PATH); the
+    # signature check is never skipped: a refusal here is the installer's own sentence.
+    env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root EKKA_VERSION="$want" EKKA_INSTALL_DIR=/usr/local/bin sh "$t/install.sh" >"$DESKS_STATE/ekka-install.log" 2>&1 \
+      || { rm -rf "$t"; die "EKKA $want did not install; see $DESKS_STATE/ekka-install.log (a rollback is explicit: EKKA_VERSION=<older> plus the installer's --allow-downgrade)"; }
+    rm -rf "$t"
+    [[ $(/usr/local/bin/ekka --version 2>/dev/null | awk '{print $2}') == "$want" ]] || die "/usr/local/bin/ekka is not $want after the install"
+    ok "ekka $want installed (signature checked by EKKA's installer)${have:+; the previous binary is /usr/local/bin/ekka.before-$have}"
+  fi
+  # `ekka` for administrators: after `sudo -i`, the same command as everywhere, run as the Enclave's user.
+  install -m 0755 -o root -g root deploy/host/sbin/ekka /usr/local/sbin/ekka
+  ok "sudo -i, then ekka <command>: this machine's Enclave (/usr/local/sbin/ekka)"
 }
 
 step_init() {
@@ -216,21 +278,9 @@ step_first_admin() {
 env_dir() {  # where the Enclave keeps an environment's files in its home: prod at the top, the others in a folder
   local e=${EKKA_ENV:-prod}; [[ $e == prod ]] && echo . || echo "$e"; }
 
-enrolled() {  # never creates the volume: a volume made by a check is root's, and the Enclave could not write it
-  docker volume inspect ekka-desks_ekka-home >/dev/null 2>&1 || return 1
-  docker run --rm -v ekka-desks_ekka-home:/h:ro alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 \
-    test -f "/h/$(env_dir)/enclave.env"
-}
+enrolled() { [[ -f $ENCLAVE_HOME/$(env_dir)/enclave.env ]]; }   # what `enclave start <id>` writes once the machine is claimed
 
-ekka_in() {  # the ekka CLI inside the Enclave's container, with its own home volume
-  (cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" run --rm -T -e EKKA_ENV="${EKKA_ENV:-prod}" \
-     --entrypoint /usr/local/bin/ekka ekka-enclave "$@")
-}
-
-claim_gone() {  # `compose run` containers outlive a killed client; find the one-off Enclave containers by compose's labels
-  docker ps -aq --filter label=com.docker.compose.oneoff=True --filter label=com.docker.compose.service=ekka-enclave \
-    | xargs -r sh -c 'docker stop -t 30 "$@" >/dev/null 2>&1; docker rm -f "$@" >/dev/null 2>&1' _ || true
-}   # stopped, not killed: a killed Enclave leaves its lock file behind and the next start refuses
+ekka_in() { enclave_ekka "$@"; }   # the Enclave's own user and home (deploy/lib.sh); kept as the name the steps use
 
 step_enroll() {
   local env=${EKKA_ENV:-prod}
@@ -240,11 +290,13 @@ step_enroll() {
   local who; who=$(ekka_in whoami 2>&1 || true)
   if ! grep -q "Signed in as" <<<"$who"; then
     stop_for_person "Sign in to EKKA as the person who owns your organization. It emails you a link; click it and this finishes:
-  sudo EKKA_ENV=$env ./deploy/setup.sh compose run --rm -T -e EKKA_ENV=$env --entrypoint /usr/local/bin/ekka ekka-enclave login --email <you>"
+  sudo -i
+  ekka login --email <you>"
   fi
   if grep -q "not in an organization" <<<"$who"; then
     stop_for_person "You are signed in but in no EKKA organization yet. Create one (or ask your org admin for an invite):
-  sudo EKKA_ENV=$env ./deploy/setup.sh compose run --rm -T -e EKKA_ENV=$env --entrypoint /usr/local/bin/ekka ekka-enclave org create <name>"
+  sudo -i
+  ekka org create <name>"
   fi
   # An account can belong to several organizations, and "current" is whichever was used last: never create the
   # Enclave there by default. Name it, switch to it, and check the switch took before anything is created.
@@ -260,13 +312,12 @@ $(grep -E '^[[:space:]]*[*]?[[:space:]]*[a-z0-9-]+[[:space:]]' <<<"$orgs" | sed 
   id=$(ekka_in enclave create --name "desks $(hostname -s)" 2>&1 | grep -o -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
   [[ -n $id ]] || die "ekka enclave create gave no id; run it by hand to see why"
   ok "Enclave $id created"
-  # The first start claims this machine, keeps the vault key in a file (no keychain in a container), then keeps
-  # running; it is stopped once claimed, and `compose up` runs it for good from then on.
-  claim_gone
+  # The first start claims this machine, keeps the vault key in a file (a server has no keychain), then keeps
+  # running; it is stopped once claimed, and the systemd unit runs it for good from then on (step_start).
   ekka_in enclave start "$id" --custody file >"$DESKS_STATE/enclave-claim.log" 2>&1 & local pid=$!
   for _ in $(seq 1 60); do
     enrolled 2>/dev/null && break; sleep 2; done
-  claim_gone; kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true   # it may have exited already
+  kill -INT "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true   # stopped, not killed: a killed Enclave leaves its lock behind
   enrolled || die "the Enclave did not finish enrolling; see $DESKS_STATE/enclave-claim.log"
   ok "this machine is claimed by Enclave $id (vault key kept in a file)"
   # A new Enclave (a first install, or after `ekka enclave reset`) has none of what three marks say the old one had:
@@ -283,8 +334,7 @@ kc() {  # the realm script against this machine's Keycloak admin listener
 # The backend adapter's credential, from Keycloak into the Enclave's vault through a pipe only (ADK-E3): never a
 # file, an argument or a terminal. The connection is the `desks` catalog row: the adapter's socket, this machine only.
 connect_desk_admin() {
-  kc admin-client on | (cd deploy && bash setup.sh compose exec -T ekka-enclave ekka api connect desks \
-      --input socket=/run/ekka-backend/backend.sock --reach loopback --stdin) >/dev/null \
+  kc admin-client on | ekka_in api connect desks --input socket=/run/ekka-backend/backend.sock --reach loopback --stdin >/dev/null \
     || die "the backend adapter's credential did not reach the Enclave's vault; nothing was stored on disk"
   ok "the backend adapter's credential is in the Enclave's vault (connection desks, this machine only)"
 }
@@ -419,8 +469,7 @@ admin_setup() {
 # Enclave's organization, node and Govern URL lines leave its container; enclave.env holds a secret too, and that
 # line never does. The file holds no credential, and compose mounts it read-only into the adapter (ADK-E1).
 write_adapter_config() {
-  (cd deploy && bash setup.sh compose exec -T ekka-enclave sh -c \
-      'grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$EKKA_HOME/enclave.env"') \
+  grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$ENCLAVE_HOME/$(env_dir)/enclave.env" \
     | python3 tools/adapter_config.py write "$DESKS_STATE/backend/config.json" "$NAME" \
     || die "the backend adapter's configuration was not written; see the line above"
 }
@@ -432,9 +481,13 @@ step_desk_admin() {  # desk administration through EKKA: only once up.env runs t
   write_adapter_config
   # Only now, with its configuration in place, the adapter's profile goes on and the adapter starts.
   grep -q '^COMPOSE_PROFILES=desk-admin$' "$DESKS_STATE/up.env" || echo "COMPOSE_PROFILES=desk-admin" >> "$DESKS_STATE/up.env"
+  sed -i 's/^DESKS_STACK_SERVICES=.*/DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway ekka-backend/' "$DESKS_STATE/up.env"
   (cd deploy && bash setup.sh backend-preflight)   # its files are real files, whatever this Compose does
-  (cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" up -d ekka-backend >/dev/null 2>&1) \
-    || die "the backend adapter did not start; see: sudo ./deploy/setup.sh compose logs ekka-backend"
+  # The adapter is one more long-lived service of the supervised stack: the unit reads the list from up.env.
+  systemctl restart ekka-desks || die "the desks stack did not restart with the adapter; see: journalctl -u ekka-desks"
+  local i; for i in $(seq 1 60); do
+    [[ $(docker inspect -f '{{.State.Health.Status}}' ekka-desks-ekka-backend-1 2>/dev/null) == healthy ]] && break; sleep 2; done
+  (( i < 60 )) || die "the backend adapter did not become healthy; see: sudo ./deploy/setup.sh compose logs ekka-backend"
   ok "the backend adapter is running, with its configuration"
 }
 
@@ -452,13 +505,42 @@ step_people_scopes() {  # people's sign-ins read-only (ADK-E2): every run, so an
   (cd deploy && bash setup.sh people-scopes) || die "people's sign-ins could not be checked; re-run to retry"
 }
 
-wait_gateway_loopback() {
-  local ready=""
-  for _ in $(seq 1 30); do
-    if (cd deploy && bash setup.sh loopback-check >/dev/null 2>&1); then ready=1; break; fi
-    sleep 2
-  done
-  [[ -n $ready ]] || die "gateway loopback did not become reachable; no ready state recorded. Repair with the same up.sh server/local command; see compose logs ekka-enclave gateway"
+wait_gateway() {  # NVIDIA's gateway answers TLS on this machine's 8080, where the native Enclave reaches it
+  local i; for i in $(seq 1 60); do
+    openssl s_client -connect 127.0.0.1:8080 -servername "$NAME" </dev/null >/dev/null 2>&1 && return 0; sleep 2; done
+  die "NVIDIA's gateway is not answering on 127.0.0.1:8080; see: journalctl -u ekka-desks, sudo ./deploy/setup.sh compose logs gateway"
+}
+
+wait_enclave() {  # the Enclave's control socket answers (ekka enclave status), as its own user
+  local i; for i in $(seq 1 30); do ekka_in enclave status >/dev/null 2>&1 && return 0; sleep 2; done
+  die "the Enclave did not come up; see: journalctl -u ekka"
+}
+
+render() {  # render <template> <dest> <mode> KEY=VALUE...: @@KEY@@ replaced; root-owned
+  local tpl=$1 dest=$2 mode=$3; shift 3
+  local text; text=$(cat "$tpl")
+  local kv; for kv in "$@"; do text=${text//"@@${kv%%=*}@@"/${kv#*=}}; done
+  printf '%s\n' "$text" > "$dest.new" && chown root:root "$dest.new" && chmod "$mode" "$dest.new" && mv -f "$dest.new" "$dest"
+}
+
+snapshot_stack() {  # a ROOT-OWNED copy of deploy/ and tools/ the supervisor unit runs from; never a person's checkout
+  rm -rf "$SNAPSHOT.new"; install -d -m 0755 "$SNAPSHOT.new"
+  cp -a deploy tools "$SNAPSHOT.new/"
+  chown -R root:root "$SNAPSHOT.new"; chmod -R u+rwX,go+rX,go-w "$SNAPSHOT.new"
+  rm -rf "$SNAPSHOT.old"; [[ -d $SNAPSHOT ]] && mv "$SNAPSHOT" "$SNAPSHOT.old"; mv "$SNAPSHOT.new" "$SNAPSHOT"; rm -rf "$SNAPSHOT.old"
+  install -D -m 0755 -o root -g root deploy/host/libexec/wait-interceptor /usr/local/libexec/ekka-desks/wait-interceptor
+}
+
+enclave_units() {  # the Enclave's unit from EKKA's own generator, this setup's drop-in, and the stack's unit
+  # `ekka enclave install-service` writes /etc/systemd/system/ekka.service from the ENROLLED home and its owner, and
+  # enables it. Run with the Enclave's home named, as root (it writes the unit), after enrollment.
+  EKKA_HOME=$ENCLAVE_HOME EKKA_ENV=${EKKA_ENV:-prod} /usr/local/bin/ekka enclave install-service --no-start >"$DESKS_STATE/install-service.log" 2>&1 \
+    || die "ekka enclave install-service refused; see $DESKS_STATE/install-service.log"
+  install -d -m 0755 /etc/systemd/system/ekka.service.d
+  render deploy/host/ekka.service.d/desks.conf.template /etc/systemd/system/ekka.service.d/desks.conf 0644 "EKKA_ENV=${EKKA_ENV:-prod}"
+  render deploy/host/ekka-desks.service.template /etc/systemd/system/ekka-desks.service 0644 "SNAPSHOT=$SNAPSHOT" "DESKS_STATE=$DESKS_STATE"
+  systemctl daemon-reload
+  systemctl enable ekka ekka-desks >/dev/null 2>&1 || die "the units could not be enabled"
 }
 
 # nginx reads its config only when it starts, and `git pull` replaces deploy/edge/nginx.conf with a new file the
@@ -476,58 +558,48 @@ edge_current() {
 }
 
 step_start() {
-  # Refuse an unknown enrolled URL before replacing any running desk's supervisor. Only an installed server has an
-  # executor URL to migrate: on a first install, enrollment has just written enclave.env WITHOUT one, and
-  # enclave-config below writes the loopback URL itself (a fresh install died here, the desk installation checks).
-  if is_done started; then
-    (cd deploy && bash setup.sh loopback-config) || die "the enrolled executor could not be migrated; nothing started"
-  fi
-  (cd deploy && DESKS_STATE=$DESKS_STATE bash ./certs.sh bundle >/dev/null) || die "the gateway's CA bundle could not be built"   # system roots + desks CA
+  (cd deploy && DESKS_STATE=$DESKS_STATE bash ./certs.sh bundle >/dev/null) || die "the gateway's CA bundle could not be built"   # system roots + desks CA, and /etc/ekka/desks-ca.crt
   # A pin bump applies whole or not at all: the supervisor first, then nothing starts the gateway able to hand
   # desk credentials out.
   (cd deploy && bash setup.sh supervisor >/dev/null) || die "the supervisor binary could not be put in place"
   (cd deploy && bash setup.sh preflight) || die "the gateway preflight refused (above); nothing was started"
+  (cd deploy && bash setup.sh backend-preflight)   # with desk-admin on, the stack starts the adapter too
+  local stack_sha; stack_sha=$( { cat deploy/compose.yml deploy/pins.json deploy/edge/nginx.conf deploy/host/ekka-desks.service.template "$DESKS_STATE/up.env"; } | sha256sum | cut -c1-16)
   if is_done started; then
-    (cd deploy && bash setup.sh backend-preflight)   # with desk-admin on, `up -d` starts the adapter too
-    if (cd deploy && bash setup.sh loopback-current >/dev/null 2>&1); then
-      # Compose keeps unchanged containers; an image/config upgrade still takes
-      # effect and reattaches dependents. A healthy no-op rerun interrupts nothing.
-      (cd deploy && bash setup.sh compose up -d >/dev/null) \
-        || die "the stack could not be reconciled; see compose logs ekka-enclave gateway"
-    else
-      # Remove the old publisher FIRST for the first port migration, or repair
-      # a stranded namespace. Durable held attempts survive this maintenance.
-      (cd deploy && bash setup.sh compose stop gateway >/dev/null \
-        && bash setup.sh compose rm -f gateway >/dev/null \
-        && bash setup.sh compose up -d --force-recreate ekka-enclave >/dev/null \
-        && bash setup.sh compose up -d >/dev/null) \
-        || die "the Enclave or gateway did not start; see: sudo ./deploy/setup.sh compose logs ekka-enclave gateway"
+    snapshot_stack; enclave_units
+    # The Enclave: the installed release runs, or it is restarted onto it (an upgrade is the binary first, then this).
+    systemctl start ekka >/dev/null 2>&1 || die "the Enclave did not start; see: journalctl -u ekka"
+    wait_enclave
+    local running; running=$(ekka_in enclave status --json 2>/dev/null | python3 -c 'import json,sys; t=sys.stdin.read(); i=t.find("{"); print(json.JSONDecoder().raw_decode(t[i:])[0].get("runner_version","") if i>=0 else "")' 2>/dev/null || true)
+    if [[ -n $running && $running != "$EKKA_VERSION" ]]; then
+      systemctl restart ekka || die "the Enclave did not restart onto $EKKA_VERSION; see: journalctl -u ekka"
+      wait_enclave; ok "Enclave restarted onto $EKKA_VERSION (was $running)"
     fi
-    wait_gateway_loopback
-    edge_current
-    ok "Enclave $EKKA_VERSION and gateway are running"; return; fi
+    # The stack: a changed compose, pin, edge config or settings restarts it (a pause for desks); otherwise only started.
+    if [[ $stack_sha != "$(cat "$DESKS_STATE/stack.sha" 2>/dev/null)" ]]; then
+      systemctl restart ekka-desks || die "the desks stack did not restart; see: journalctl -u ekka-desks"
+      echo "$stack_sha" >"$DESKS_STATE/stack.sha"; ok "the desks stack restarted on its new configuration"
+    else
+      systemctl start ekka-desks >/dev/null 2>&1 || die "the desks stack did not start; see: journalctl -u ekka-desks"
+    fi
+    wait_gateway
+    ok "Enclave $EKKA_VERSION (systemd: ekka) and the desks stack (systemd: ekka-desks) are running"; return; fi
   say "starting the Enclave and NVIDIA's gateway"
-  local env=${EKKA_ENV:-prod} c="bash setup.sh compose"
+  local env=${EKKA_ENV:-prod}
   (cd deploy && bash setup.sh enclave-config "$env" desks)
+  snapshot_stack; enclave_units
   # `ekka secret put` talks to a running Enclave, so: start it, store the secret, restart it so it reads the secret.
-  # Also cover a setup interrupted before its started marker was written.
-  (cd deploy && $c stop gateway >/dev/null && $c rm -f gateway >/dev/null \
-    && $c up -d ekka-enclave >/dev/null 2>&1)
-  for _ in $(seq 1 30); do (cd deploy && $c exec -T ekka-enclave ekka enclave status >/dev/null 2>&1) && break; sleep 2; done
+  systemctl restart ekka || die "the Enclave did not start; see: journalctl -u ekka"
+  wait_enclave
   (cd deploy && bash setup.sh enclave-secret "$env")
-  (cd deploy && bash setup.sh backend-preflight)   # a reinstall with desk-admin on starts the adapter here
-  (cd deploy && $c restart ekka-enclave >/dev/null && $c up -d >/dev/null 2>&1) \
-    || die "the Enclave or gateway did not start; see: sudo ./deploy/setup.sh compose logs ekka-enclave gateway"
-  wait_gateway_loopback
+  systemctl restart ekka || die "the Enclave did not restart; see: journalctl -u ekka"
+  wait_enclave
+  systemctl restart ekka-desks || die "the desks stack did not start; see: journalctl -u ekka-desks"
+  wait_gateway
+  echo "$stack_sha" >"$DESKS_STATE/stack.sha"
   edge_conf_sha >"$DESKS_STATE/edge-conf.sha"   # the edge was just started on this config
   done_ started
-  ok "Enclave and NVIDIA's gateway are running"
-}
-
-step_loopback_repair() {
-  [[ $MODE == server ]] || return 0
-  python3 tools/loopback_repair.py install "$DESKS_STATE" "$PWD" \
-    || die "gateway repair service could not be installed; see its journal; server not ready"
+  ok "Enclave $EKKA_VERSION (systemd: ekka) and the desks stack (systemd: ekka-desks) are running"
 }
 
 # The setup and ask plans for one desk, owned by the desks agent: create_desk_plans <desk> <agent id>.
@@ -560,15 +632,14 @@ create_desk_admin_plans() {
 # install_plans "<path> <code>"... shared|private. A shared plan is offered to the organization and accepted (share_plan).
 install_plans() {
   local sharing=${2:-private}
-  local c="docker compose -f compose.yml --env-file $DESKS_STATE/up.env exec -T ekka-enclave ekka" path code out identity rung
-  # `docker compose exec` reads standard input, so every command in this loop gets /dev/null: otherwise the
-  # first one swallows the rest of the list and only the first plan is made.
+  local path code out identity rung
+  # Every command in this loop gets /dev/null as input: otherwise the first one swallows the rest of the list.
   while read -r path code; do
-    docker cp "$path" "ekka-desks-ekka-enclave-1:/tmp/$(basename "$path")" >/dev/null </dev/null \
-      || die "could not copy $path into the Enclave; is it running? sudo ./up.sh status"
-    out=$(cd deploy && $c plan create "/tmp/$(basename "$path")" 2>&1 </dev/null) \
+    install -d -m 0700 -o ekka -g ekka "$ENCLAVE_HOME/plans"
+    enclave_home_file "plans/$(basename "$path")" 0600 < "$path"   # a file the Enclave's user may read
+    out=$(ekka_in plan create "$ENCLAVE_HOME/plans/$(basename "$path")" 2>&1 </dev/null) \
       || die "the plan $code was not created: $(grep -v -E '^\s*$|STAGING|rehearsal' <<<"$out" | head -3 | tr '\n' ' ')
-   see it again: sudo ./deploy/setup.sh compose exec -T ekka-enclave ekka plan create /tmp/$(basename "$path")"
+   see it again: sudo -i; ekka plan create $ENCLAVE_HOME/plans/$(basename "$path")"
     ok "plan $(grep -o -E "${code//./\\.}@[0-9.]+" <<<"$out" | head -1 || echo "$code"), owned by $DESKS_AGENT"
     if [[ $sharing == shared ]]; then
       # `ekka plan create` prints "✓ Plan created: <identity> · <rung>", the rung being EKKA's own answer.
@@ -584,23 +655,23 @@ install_plans() {
 # EKKA's PUBLIC catalog, and up.sh runs again on every upgrade. So nothing else is ever offered, and the approval
 # runs only when EKKA answered that the offer is for the organization.
 share_plan() {
-  local identity=$1 rung=$2 out c="docker compose -f compose.yml --env-file $DESKS_STATE/up.env exec -T ekka-enclave ekka"
+  local identity=$1 rung=$2 out
   if [[ -z $identity || $rung != unlisted ]]; then
     ok "plan ${identity:-?} is ${rung:-of unknown standing}: not offered (an offer of an org plan would go to EKKA's public catalog)"
     return 0
   fi
-  out=$(cd deploy && $c plan publish "$identity" 2>&1 </dev/null) \
+  out=$(ekka_in plan publish "$identity" 2>&1 </dev/null) \
     || die "the plan $identity was not offered to the organization: $(grep -v -E '^\s*$|STAGING|rehearsal' <<<"$out" | head -2 | tr '\n' ' ')"
   grep -q "requested for org" <<<"$out" \
     || die "the plan $identity was offered somewhere other than this organization, so it was not approved: $(grep -v -E '^\s*$' <<<"$out" | head -2 | tr '\n' ' ')"
-  out=$(cd deploy && $c plan approve "$identity" 2>&1 </dev/null) \
+  out=$(ekka_in plan approve "$identity" 2>&1 </dev/null) \
     || die "the plan $identity was offered but not approved: $(grep -v -E '^\s*$|STAGING|rehearsal' <<<"$out" | head -2 | tr '\n' ' ')"
   grep -q "is now org" <<<"$out" || die "the plan $identity was approved to something other than this organization: $(head -1 <<<"$out")"
   ok "plan $identity: every member of this organization may run it"
 }
 
 desks_agent_id() {
-  (cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" exec -T ekka-enclave ekka agent list --json 2>/dev/null) \
+  ekka_in agent list --json 2>/dev/null \
     | DESKS_AGENT=$DESKS_AGENT python3 -c '
 import json, os, sys
 t = sys.stdin.read(); i = t.find("{")
@@ -615,9 +686,9 @@ step_grant() {  # a desks-only agent owns the desk plans and may work on every d
   say "a desks agent for your organization ($DESKS_AGENT)"
   # Its own agent, not the organization's core one: widening a published core agent is a new major version
   # that everyone who installed it must approve again, and desk work should not ride on other plans' agent.
-  local c="docker compose -f compose.yml --env-file $DESKS_STATE/up.env exec -T ekka-enclave ekka" ids id gate p
-  (cd deploy && $c agent create "$DESKS_AGENT" --name "Desks" >/dev/null 2>&1) || true   # an agent that exists is kept
-  ids=$(cd deploy && { $c enclave status --json; echo; $c agent list --json; echo; $c gate list --json; } 2>/dev/null | DESKS_AGENT=$DESKS_AGENT python3 -c '
+  local ids id gate p
+  ekka_in agent create "$DESKS_AGENT" --name "Desks" >/dev/null 2>&1 || true   # an agent that exists is kept
+  ids=$( { ekka_in enclave status --json; echo; ekka_in agent list --json; echo; ekka_in gate list --json; } 2>/dev/null | DESKS_AGENT=$DESKS_AGENT python3 -c '
 import json, os, sys
 docs, buf = [], ""
 for line in sys.stdin.read().splitlines():
@@ -631,14 +702,14 @@ agent = [a["agent_id"] for a in agents["agents"] if a["agent_code"] == os.enviro
 job = [g["instance_id"] for g in gates if g.get("connector_type") == "job" and g.get("node_id") == node]
 print(agent[0] if agent else "", job[0] if job else "")') || true
   read -r id gate <<<"$ids"
-  [[ -n $id && -n $gate ]] || die "could not find agent $DESKS_AGENT or this Enclave's job gate; see: sudo ./deploy/setup.sh compose exec -T ekka-enclave ekka agent list"
+  [[ -n $id && -n $gate ]] || die "could not find agent $DESKS_AGENT or this Enclave's job gate; see: sudo -i; ekka agent list"
   # The example plans for code-desk, owned by that agent (plan.agent): creating them declares job.run on it,
   # and only on it. Another desk gets its own: sudo ./up.sh desk-plans <desk>.
   create_desk_plans code-desk "$id"
-  if (cd deploy && $c gate grant list 2>/dev/null) | grep -q "job.run $gate/desks/\*  agent $id "; then
+  if ekka_in gate grant list 2>/dev/null | grep -q "job.run $gate/desks/\*  agent $id "; then
     ok "$DESKS_AGENT already may work on desks/* (kept)"
   else
-    (cd deploy && $c gate grant add --agent "$DESKS_AGENT" --type job --instance "$gate" --resource 'desks/*' --capability job.run --no-fingerprint) \
+    ekka_in gate grant add --agent "$DESKS_AGENT" --type job --instance "$gate" --resource 'desks/*' --capability job.run --no-fingerprint \
       | grep -E "Granted|take it back" || die "the grant was refused; is your organization's edition allowed to run jobs (job.run)?"
   fi
   done_ grant
@@ -652,12 +723,12 @@ step_agent_open() {  # every member may RUN the desks agent's shared plans; writ
   # role), and nobody writes a plan under this agent unless an owner appoints them (`--as author`).
   # The floor (DESK_ADMIN_MIN_EKKA, 0.1.124) has `ekka agent allow`; the read-back below
   # stops the install on any EKKA where it did not take, whatever the reason.
-  local c="docker compose -f compose.yml --env-file $DESKS_STATE/up.env exec -T ekka-enclave ekka" out mode
-  out=$(cd deploy && $c agent allow "$DESKS_AGENT" --everyone --as use 2>&1 </dev/null) \
+  local out mode
+  out=$(ekka_in agent allow "$DESKS_AGENT" --everyone --as use 2>&1 </dev/null) \
     || die "EKKA refused to let every member run the plans of $DESKS_AGENT: $(grep -v -E '^\s*$|STAGING|rehearsal' <<<"$out" | head -2 | tr '\n' ' ')"
   # Confirmed from Govern's own record, not from the sentence `allow` prints: `agent show --json` names the mode
   # as access.use, and a mode Govern could not read is "unknown (refused)", never open.
-  mode=$(cd deploy && $c agent show "$DESKS_AGENT" --json 2>/dev/null </dev/null | python3 -c '
+  mode=$(ekka_in agent show "$DESKS_AGENT" --json 2>/dev/null </dev/null | python3 -c '
 import json, sys
 t = sys.stdin.read(); i = t.find("{")
 # The first JSON document only: the ekka CLI prints a tier banner around it.
@@ -700,14 +771,13 @@ step_desk_grant() {  # the desks grant with its limits (ADK-E4): only once up.en
   grep -q '^EKKA_BACKEND_IMAGE=.' "$DESKS_STATE/up.env" 2>/dev/null || return 0
   say "the desks grant, with its limits"
   local image desk_id pdig ids id gate limits=$DESKS_STATE/backend/desks-grant.json decision g
-  local c="docker compose -f compose.yml --env-file $DESKS_STATE/up.env exec -T ekka-enclave ekka"
   image=$(sed -n 's/^EKKA_BACKEND_IMAGE=//p' "$DESKS_STATE/up.env")
   # The content ID of the image built from the pinned EKKA image repository.
   desk_id=$(docker image inspect --format '{{.Id}}' ekka-desk:local 2>/dev/null) || die "the desk image is not built; run again"
   # The reviewed baseline's digest, by the adapter's own code from its pinned image, with no network.
   pdig=$(docker run --rm -i --network none "$image" digest policy - < desk/policy.json) \
     || die "the backend adapter could not digest desk/policy.json; no grant was changed"
-  ids=$(cd deploy && { $c enclave status --json; echo; $c agent list --json; echo; $c gate list --json; } 2>/dev/null | DESKS_AGENT=$DESKS_AGENT python3 -c '
+  ids=$( { ekka_in enclave status --json; echo; ekka_in agent list --json; echo; ekka_in gate list --json; } 2>/dev/null | DESKS_AGENT=$DESKS_AGENT python3 -c '
 import json, os, sys
 docs, buf = [], ""
 for line in sys.stdin.read().splitlines():
@@ -732,7 +802,7 @@ print(agent[0] if agent else "", api[0] if api else "")') || true
   python3 tools/desk_grant.py limits --image-id "$desk_id" --policy-digest "$pdig" $providers > "$limits.new" \
     || die "the desks grant's limits could not be written; no grant was changed"
   mv "$limits.new" "$limits"
-  decision=$( (cd deploy && $c gate grant list --json) | python3 tools/desk_grant.py decide "$id" "$gate" "$limits") \
+  decision=$(ekka_in gate grant list --json | python3 tools/desk_grant.py decide "$id" "$gate" "$limits") \
     || die "could not read this organization's grants; no grant was changed"
   if [[ $decision == keep* ]]; then ok "the desks grant already holds these limits (kept)"; return; fi
   # ADD FIRST, revoke after: desks are never left without a grant. The limits reach the CLI in the Enclave's
@@ -740,26 +810,26 @@ print(agent[0] if agent else "", api[0] if api else "")') || true
   local grant_out
   # Drain the command before checking its words: grep -q can close stdout early,
   # making a successful CLI write fail with SIGPIPE under pipefail.
-  grant_out=$(cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" exec -T ekka-enclave sh -c \
-      'f=$(mktemp) && cat > "$f" && ekka gate grant add --agent "$0" --type api --instance "$1" --resource apis/desks \
-         --capability api.write --ttl 31536000 --constraint "$f"; rc=$?; rm -f "$f"; exit $rc' "$DESKS_AGENT" "$gate" \
-      < "$limits") || die "the desks grant outcome could not be confirmed; the previous grant, if any, is kept"
+  enclave_home_file desks-grant.json 0600 < "$limits"   # the limits, as a file the Enclave's user may read
+  grant_out=$(ekka_in gate grant add --agent "$DESKS_AGENT" --type api --instance "$gate" --resource apis/desks \
+      --capability api.write --ttl 31536000 --constraint "$ENCLAVE_HOME/desks-grant.json") \
+    || { rm -f "$ENCLAVE_HOME/desks-grant.json"; die "the desks grant outcome could not be confirmed; the previous grant, if any, is kept"; }
+  rm -f "$ENCLAVE_HOME/desks-grant.json"
   grep -q "Granted" <<<"$grant_out" \
     || die "the desks grant outcome could not be confirmed; the previous grant, if any, is kept"
   for g in ${decision#replace}; do
     [[ $decision == replace* ]] || break
-    (cd deploy && $c gate grant revoke "$g" >/dev/null) || die "the new desks grant is in place, but $g was not revoked"
+    ekka_in gate grant revoke "$g" >/dev/null || die "the new desks grant is in place, but $g was not revoked"
   done
   ok "the $DESKS_AGENT agent may administer desks within the limits in $limits"
 }
 
 configure_enclave_cli() {
   # Public defaults only: never import a person's sign-in, token or client secret.
-  (cd deploy && bash setup.sh compose cp "$DESKS_STATE/people/desks-ca.pem" ekka-enclave:/var/lib/ekka/.ekka/desks-ca.pem \
-    && bash setup.sh compose cp "$DESKS_STATE/people/desk-policy.json" ekka-enclave:/var/lib/ekka/.ekka/desk-policy.json \
-    && bash setup.sh compose exec -T ekka-enclave sh -c \
-      'umask 077; f=$(mktemp); trap '\''rm -f "$f"'\'' EXIT; cat > "$f"; ekka desk backend set "$f"' \
-      < "$DESKS_STATE/enclave-cli/backend.json")
+  enclave_home_file desks-ca.pem 0644 < "$DESKS_STATE/people/desks-ca.pem" \
+    && enclave_home_file desk-policy.json 0644 < "$DESKS_STATE/people/desk-policy.json" \
+    && enclave_home_file backend.json 0600 < "$DESKS_STATE/enclave-cli/backend.json" \
+    && ekka_in desk backend set "$ENCLAVE_HOME/backend.json"
 }
 
 server_ekka() {
@@ -770,12 +840,7 @@ server_ekka() {
         die "do not pass a credential as an argument; use the command's sign-in or hidden-input flow" ;;
     esac
   done
-  cd deploy
-  if [[ -t 0 && -t 1 ]]; then
-    exec bash setup.sh compose exec ekka-enclave ekka "$@"
-  else
-    exec bash setup.sh compose exec -T ekka-enclave ekka "$@"
-  fi
+  enclave_ekka "$@"
 }
 
 step_people() {
@@ -801,13 +866,12 @@ Then: docs/SET-UP-YOUR-DESK.md and docs/ASK-YOUR-CODE.md."
 case "${1:-}" in
   server) MODE=server; NAME=${2:-}; [[ $# == 2 && $NAME =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "usage: ./up.sh server <dns-name>"; MODE_ARGS="server $NAME" ;;
   status)
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-failed --quiet ekka-desks-loopback-repair.service 2>/dev/null; then
-      die "gateway repair failed; inspect: sudo journalctl -u ekka-desks-loopback-repair.service; repair with the original up.sh server command"
-    fi
     ls -1 "$DONE" 2>/dev/null | sed 's/^/done: /' || echo "nothing done yet"
     if is_done started; then
-      (cd deploy && bash setup.sh loopback-check) || exit 1
-      echo "gateway loopback: reachable"
+      echo "ekka (the Enclave): $(systemctl is-active ekka 2>/dev/null)   ekka-desks (the stack): $(systemctl is-active ekka-desks 2>/dev/null)"
+      [[ -S /run/ekka/openshell-interceptor.sock ]] && echo "interceptor socket: present" || { echo "interceptor socket: MISSING"; exit 1; }
+      docker ps --format '  {{.Names}}: {{.Status}}' --filter label=com.docker.compose.project=ekka-desks
+      [[ $(systemctl is-active ekka) == active && $(systemctl is-active ekka-desks) == active ]] || exit 1
     fi
     exit 0 ;;
   invite)  # one more person who uses desks: sudo ./up.sh invite <username> <email>
@@ -898,4 +962,4 @@ case "${1:-}" in
     OPENSHELL_WORKSPACE=${OPENSHELL_WORKSPACE:-desks} as_gateway_admin "$OS" -g ekka-agent-desks "$@"; exit $? ;;   # the desks' workspace unless told otherwise
   *) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d'; exit 2 ;;
 esac
-step_preflight; step_settings; step_images; step_backend_image; step_init; step_workspace_policy; step_first_admin; step_enroll; step_start; step_people_scopes; step_workspace_restart; step_loopback_repair; step_admin; step_desk_admin; step_grant; step_agent_open; step_desk_grant; step_people
+step_preflight; step_host_accounts; step_settings; step_images; step_backend_image; step_enclave_install; step_init; step_workspace_policy; step_first_admin; step_enroll; step_start; step_people_scopes; step_workspace_restart; step_admin; step_desk_admin; step_grant; step_agent_open; step_desk_grant; step_people
