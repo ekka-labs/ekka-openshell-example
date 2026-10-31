@@ -50,7 +50,10 @@ On the **server**, clone the integration example:
 git clone --recurse-submodules https://github.com/ekka-labs/ekka-openshell-example.git
 cd ekka-openshell-example
 sudo ALLOW_FROM=<your-vpn-or-office-ip> ./deploy/harden.sh
+sudo curl -fsSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && sudo chmod +x /usr/local/bin/cosign
 ```
+
+The last line installs cosign: the installer checks EKKA's release signature with it and refuses without it.
 
 Replace every `<...>` value before running a command. Keep this terminal in the repository folder for the rest of the guide.
 
@@ -107,7 +110,7 @@ What it sets up, in order:
 
 1. NVIDIA OpenShell's gateway (NVIDIA's image, pinned by digest), the team sign-in service (Keycloak) and the HTTPS front.
 2. A private certificate authority that may only vouch for this server's own names (checked: a certificate it signs for any other site is rejected).
-3. The EKKA Enclave, enrolled into `EKKA_ORG`, with desks registered automatically.
+3. The EKKA Enclave, as a systemd service (`ekka.service`) running as its own user, enrolled into `EKKA_ORG`, with desks registered automatically, and the `ekka` command for administrators: `sudo -i`, then `ekka <command>`.
 4. NVIDIA's provider profiles from `providers/`.
 5. People's sign-ins to the desks, set to read only.
 6. Desk administration through EKKA: the backend adapter (its image pulled by digest and its signature checked), its configuration, and its credential in the Enclave's vault.
@@ -119,8 +122,9 @@ The Developer and Enterprise editions include desk jobs. If setup refuses a job 
 Check it:
 
 ```sh
-sudo ./up.sh status                    # one line each: done: admin, done: first-admin, done: grant, done: init, done: started
-sudo docker ps                         # gateway, ekka-enclave, ekka-backend, edge, keycloak, keycloak-db: all up
+sudo ./up.sh status                    # done: lines, then the two services and the interceptor socket
+systemctl status ekka ekka-desks       # the Enclave, and the stack bound to it
+sudo docker ps                         # gateway, ekka-backend, edge, keycloak, keycloak-db: all up
 ```
 
 After an update of this repository, put the provider profiles into the gateway again:
@@ -221,16 +225,17 @@ Public GitHub repositories need no token. For private repositories, run `sudo ./
 On the server, sign this server's Enclave in to the desks once. It prints an address: open it in a browser on a computer set up as in step 6, and sign in as `desks-admin`. That sign-in has read permissions only. Then make the desk:
 
 ```sh
-sudo ./up.sh ekka desk login
-sudo ./up.sh ekka desk create code-desk --provider claude-code
+sudo -i
+ekka desk login
+ekka desk create code-desk --provider claude-code
 ```
 
-**Who can change a desk.** In this release every desk change (create, delete, stop, start, policy, allow, deny, disconnect) runs here, through the Enclave, as `sudo ./up.sh ekka desk <command>`. It runs under the EKKA sign-in of the person who installed the server, whoever types it, so only people with sudo on this server can change a desk. A person's `ekka` on their own computer reads desks and is refused for changes ([Change a desk](OPERATIONS.md#change-a-desk)).
+**Who can change a desk.** In this release every desk change (create, delete, stop, start, policy, allow, deny, disconnect) runs here, through the Enclave, as `ekka desk <command>`. It runs under the EKKA sign-in of the person who installed the server, whoever types it, so only people with sudo on this server can change a desk. A person's `ekka` on their own computer reads desks and is refused for changes ([Change a desk](OPERATIONS.md#change-a-desk)).
 
 Check registration:
 
 ```sh
-sudo ./up.sh ekka desk show code-desk
+ekka desk show code-desk
 ```
 
 Wait for it to say **Pinned**. Poll that read if necessary; do not repeat creation. `code-desk` already has its example plans from installation. For another desk, create its plans once with `sudo ./up.sh desk-plans <desk>`.
@@ -247,7 +252,7 @@ Some walk checks read the desks as you, with your own sign-in on the server. Set
 
 | What | How |
 |---|---|
-| Is everything up? | `sudo ./up.sh status`, and `cd deploy && sudo ./setup.sh compose ps` |
+| Is everything up? | `sudo ./up.sh status`, `systemctl status ekka ekka-desks`, and `cd deploy && sudo ./setup.sh compose ps` |
 | After updating this repository | `sudo ./up.sh profiles` puts the provider profiles into the gateway again |
 | Certificates, upgrades, backup and restore | [Running a server](OPERATIONS.md) |
 | Security updates | install daily by themselves; reboot in a quiet hour when `/var/run/reboot-required` exists |

@@ -20,10 +20,10 @@ If you followed the install guide, `code-desk` exists already, with its plans: s
 
 **Why:** the desk is the agent's own workspace for this job, cut off from your machine. Its shipped policy allows GitHub clone and fetch; attached connections add the services the agent may use.
 
-On the machine you installed on, where every desk change runs ([why](OPERATIONS.md#change-a-desk)):
+On the machine you installed on, as root (`sudo -i`), where every desk change runs ([why](OPERATIONS.md#change-a-desk)):
 
 ```sh
-sudo ./up.sh ekka desk create code-desk --provider claude-code
+ekka desk create code-desk --provider claude-code
 ```
 
 Every desk gets the setup's policy ([`desk/policy.json`](../desk/policy.json)), which the server installer sets as the Enclave's default. It keeps the system folders read-only, lets programs write only to `/tmp` and the work folder, and runs them as a normal user. The shipped GitHub rule lets only `git` clone and fetch. `claude-code` adds the Anthropic connection. For private repositories, connect a read-only GitHub Contents token with `sudo ./up.sh connect github` and include `--provider github` in the create command. Other network traffic is blocked.
@@ -31,7 +31,7 @@ Every desk gets the setup's policy ([`desk/policy.json`](../desk/policy.json)), 
 The desk registers itself with EKKA shortly after it starts. Check it:
 
 ```sh
-sudo ./up.sh ekka desk show code-desk
+ekka desk show code-desk
 ```
 
 Each desk is set up and asked through its own plans. `code-desk`'s came with the install. For any other desk, make them once, on the machine where you installed:
@@ -53,7 +53,7 @@ plans to yourself, add `--private`: `sudo ./up.sh desk-plans business-desk --pri
 On the machine where you installed:
 
 ```sh
-sudo ./up.sh ekka plan run ekka.example.desk.setup.codeDesk.v1 \
+ekka plan run ekka.example.desk.setup.codeDesk.v1 \
   --input 'repos=["https://github.com/your-org/api", "https://github.com/your-org/web"]'
 ```
 
@@ -81,7 +81,7 @@ cloned=2 reused=0 updated=0 reset=0 skipped=0 failed=0 result=ready
 The agent writes a map of every repository, its branch and commit. Ask it to read that map and report what is ready:
 
 ```sh
-sudo ./up.sh ekka plan run ekka.example.desk.ask.codeDesk.v1 \
+ekka plan run ekka.example.desk.ask.codeDesk.v1 \
   --input question="Which repositories are on this desk, and what branch and commit is each on?"
 ```
 
@@ -100,7 +100,7 @@ answering. See [the desk's repository copies](ASK-YOUR-CODE.md#the-desks-reposit
 ## What made this safe
 
 - The plan names a prompt, `desk-setup` version 3, that EKKA keeps and never changes. EKKA sends its text and SHA-256 in the signed request; your Enclave refuses the run if the text differs.
-- Your desks agent may run jobs on this workspace's desks because of one grant, made at install. `sudo ./up.sh ekka gate grant list` shows it, with the command to take it back.
+- Your desks agent may run jobs on this workspace's desks because of one grant, made at install. `ekka gate grant list` shows it, with the command to take it back.
 - The desk could reach only GitHub and Anthropic. Only `claude` could use the Anthropic key, and only `git` and `gh` the GitHub token.
 
 Next: [Ask your code a question](ASK-YOUR-CODE.md).

@@ -18,10 +18,10 @@ sudo ./up.sh desk-plans business-desk     # ekka.example.desk.ask.businessDesk.v
 
 **Why:** the answer comes from the code on the desk, at a known commit, not from what a model remembers. Repository files remain on the desk. The selected model provider receives the code context the agent sends for inference; EKKA's control plane does not receive your repository.
 
-On the machine where you installed:
+On the machine where you installed, as root (`sudo -i`):
 
 ```sh
-sudo ./up.sh ekka plan run ekka.example.desk.ask.codeDesk.v1 \
+ekka plan run ekka.example.desk.ask.codeDesk.v1 \
   --input question="How does a user reset their password, from the request to the email? Cite the files and lines."
 ```
 
@@ -38,7 +38,7 @@ The plan name without a version runs its newest version, so an upgrade of this s
 The completed plan displays the answer on the installed machine. Read it again with the run id it printed:
 
 ```sh
-sudo ./up.sh ekka run show 99908c81-6f2b-41da-ad1f-ffe31a7eac86
+ekka run show 99908c81-6f2b-41da-ad1f-ffe31a7eac86
 ```
 
 The run succeeds only when the Enclave collected an answer file. A run that wrote none fails.
@@ -64,7 +64,7 @@ A desk is a shared workspace. We do not guarantee privacy between people using t
 | The answer | written once on the desk as `.ekka/answer.md` for EKKA to collect (from EKKA 0.1.120, removed once collected), and a copy on your Enclave with the run |
 | Repository preparation and relevant working-tree changes | `.ekka/ask-record.json` on the desk, kept on your Enclave with the run |
 | Your question | with the run in EKKA, like every run input |
-| What ran, on which desk, with which prompt, and the answer's digest | EKKA's signed record: `sudo ./up.sh ekka receipts show <run>` |
+| What ran, on which desk, with which prompt, and the answer's digest | EKKA's signed record: `ekka receipts show <run>` |
 
 ## The desk's repository copies
 

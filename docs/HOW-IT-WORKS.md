@@ -36,8 +36,8 @@ OpenShell lets an outside service approve or refuse an action before it happens 
 
 | OpenShell action | What EKKA does |
 |---|---|
-| Create a desk | Allowed for a desk change run through EKKA (`sudo ./up.sh ekka desk create`, on the installed machine). Refused for the Enclave's machine identity: the Enclave runs work on desks, it never makes them on its own. |
-| Delete a desk | Allowed for a desk change run through EKKA (`sudo ./up.sh ekka desk delete`), recorded. Refused for the Enclave's machine identity. |
+| Create a desk | Allowed for a desk change run through EKKA (`ekka desk create`, on the installed machine). Refused for the Enclave's machine identity: the Enclave runs work on desks, it never makes them on its own. |
+| Delete a desk | Allowed for a desk change run through EKKA (`ekka desk delete`), recorded. Refused for the Enclave's machine identity. |
 | Change a desk's policy | Only a desk change run through EKKA, with a complete and valid policy. Never the desk itself, never the Enclave's machine identity, never while a job runs on that desk. |
 | Propose a policy change from inside a desk | Telemetry is allowed; any proposed change is refused. |
 | Attach a key to an existing desk | EKKA decides, for that exact key: yes, no, or wait for a person's decision. Never while a job runs. Recorded. |
@@ -68,7 +68,7 @@ request to any other host     ──▶ no key, or refused by the desk's policy
 ## How a job runs
 
 ```text
-sudo ./up.sh ekka plan run ekka.example.desk.ask.codeDesk.v1 --input question="..."
+ekka plan run ekka.example.desk.ask.codeDesk.v1 --input question="..."
   1. EKKA checks the plan against your grants: may this agent run a job on desks/code-desk?
   2. EKKA puts the step's prompt, and its SHA-256, in the signed request
   3. the Enclave checks the signature and the prompt's SHA-256, then starts the job on the desk
@@ -92,11 +92,11 @@ Each desk has a policy, which OpenShell enforces for every program in it:
 - **Programs:** only the programs each key names may use it (`claude` for the Anthropic key; `git` and `gh` for GitHub).
 - **Files:** system folders are read-only; programs write only to the work folder (`/sandbox/ekka-workspace`) and `/tmp`, as a normal user.
 
-Read a desk's policy in plain words with `ekka desk policy show code-desk`. Change it on the installed machine with `sudo ./up.sh ekka desk allow` and `sudo ./up.sh ekka desk deny` (see [Commands](COMMANDS.md)).
+Read a desk's policy in plain words with `ekka desk policy show code-desk`. Change it on the installed machine with `ekka desk allow` and `ekka desk deny` (see [Commands](COMMANDS.md)).
 
 ## Desks register themselves
 
-When you make a desk with `sudo ./up.sh ekka desk create`, the gateway labels it, and the Enclave adds it to EKKA by itself and pins it (the desk's identity and policy). If a still-pinned desk is unexpectedly replaced by a different one with the same name, the Enclave refuses to run work on it until a person approves the new one with `sudo ./up.sh ekka desk repin`.
+When you make a desk with `ekka desk create`, the gateway labels it, and the Enclave adds it to EKKA by itself and pins it (the desk's identity and policy). If a still-pinned desk is unexpectedly replaced by a different one with the same name, the Enclave refuses to run work on it until a person approves the new one with `ekka desk repin`.
 
 ## What this setup does not do
 

@@ -39,12 +39,12 @@ Follow the **[server installation guide](docs/SERVER.md)** to configure access, 
 
 ## Try the example
 
-After installation, run these commands **on the server**, from the repository folder.
+After installation, run these commands **on the server, as root** (`sudo -i` first). They work from any folder: `ekka` there is this server's Enclave.
 
 ### 1. Prepare a public repository
 
 ```sh
-sudo ./up.sh ekka plan run ekka.example.desk.setup.codeDesk.v1 \
+ekka plan run ekka.example.desk.setup.codeDesk.v1 \
   --input 'repos=["https://github.com/octocat/Hello-World"]'
 ```
 
@@ -53,7 +53,7 @@ No GitHub token is needed for this public repository.
 ### 2. Ask about its code
 
 ```sh
-sudo ./up.sh ekka plan run ekka.example.desk.ask.codeDesk.v1 \
+ekka plan run ekka.example.desk.ask.codeDesk.v1 \
   --input 'question=What does the README say? Cite its file and line.'
 ```
 
@@ -62,7 +62,7 @@ The answer should cite `Hello-World/README`, line 1, containing `Hello World!`. 
 ### 3. Verify the execution record
 
 ```sh
-sudo ./up.sh ekka receipts verify
+ekka receipts verify
 ```
 
 Receipt verification checks the execution record. It does not establish that the model's answer is correct. See [answers and records](docs/ASK-YOUR-CODE.md) for how to inspect a run.

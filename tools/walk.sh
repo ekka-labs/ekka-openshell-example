@@ -95,7 +95,6 @@ covers "./up.sh profiles"
 t "provider profiles reload into the gateway" 'profile (claude-code|github) (imported|updated)' ./up.sh profiles
 covers "./up.sh openshell"
 t "NVIDIA's CLI answers as the gateway's administrator" 'NAME|claude-code|github' ./up.sh openshell provider list
-covers "./up.sh ekka"
 t "the Enclave's ekka answers through up.sh" 'organization' ./up.sh ekka whoami
 covers "./up.sh walk"
 
@@ -541,6 +540,7 @@ t "a run answer path is the edge's 404: this server serves no downloads to lapto
 t "a run receipt path is the edge's 404" '^status=404 ' edge_get GET "/ekka/runs/$run_id/receipt"
 t "a run session path is the edge's 404: no remote conversation" '^status=404 ' edge_get GET "/ekka/runs/$run_id/session"
 
+not_walked "ekka enclave install-service" "run by up.sh step_start on this machine; regenerating the unit by hand is maintenance, not a walk leg"
 not_walked "ekka job answer" "needs the id of a finished run on this server; the first answer in README.md exercises it"
 
 section "desk administration through EKKA"

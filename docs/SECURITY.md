@@ -39,31 +39,21 @@ A server question asks the agent to refresh the repository copies before answeri
 | Run evidence | Signed instructions, requester identity, outcome and output digests in the run's records |
 | Optional requester name/email snapshot | Retained in local receipts and exports; it grants no authority |
 
-`sudo ./up.sh ekka receipts verify` checks the signed record chain. The answer displayed by `run show` is the Enclave's local copy; its display does not independently compare its bytes with the signed output digest.
+`ekka receipts verify` checks the signed record chain. The answer displayed by `run show` is the Enclave's local copy; its display does not independently compare its bytes with the signed output digest.
 
 ## Server and supply chain
 
 The server guide restricts inbound access to your selected network addresses, configures a private certificate authority and uses separate team sign-ins. Gateway startup checks require the Enclave and the pinned supervisor configuration.
 
-Infrastructure images are pinned by digest. The backend adapter image is signature-verified. The Enclave image is built locally from a checksum- and signature-verified EKKA release. The agent image is built from the committed Dockerfile. See [source and licenses](OVERVIEW.md#source-and-licenses).
+Infrastructure images are pinned by digest. The backend adapter image is signature-verified. The Enclave is the EKKA release installed by EKKA's own installer, which checks the release's checksum and signature with cosign and refuses without them. The agent image is built from the committed Dockerfile. See [source and licenses](OVERVIEW.md#source-and-licenses).
 
 These controls and signed records support your security and audit processes. Compliance depends on your organization's configuration, operations and obligations.
 
-The server executor and gateway share a Docker network namespace, so the executor uses literal loopback
-without weakening its local-only check. TLS still checks the configured public gateway name. Port 8080
-is published by that namespace's Enclave service, while only the gateway container mounts Docker control
-and gateway secrets. Shared networking does not share process, mount or user namespaces. See
-[restart limitations and recovery](OPERATIONS.md#server-loopback-and-restart-recovery).
-
-The Linux server's Docker-start and 60-second timer repair oneshot runs as root within the existing Docker administration
-trust. Its installed code, rendered gateway configuration and preflight pins are root-owned and reject
-symlinks or paths writable by other users. Existing read-only gateway TLS/JWT data keeps its
-kit-assigned uid1000 ownership under a root-protected parent; it is never executed as repair code.
-The service never loads mutable checkout/env files at boot. Repair
-recreates only an already-running gateway after validating its mounts and existing credential preflight;
-it neither restarts the Enclave nor undoes a deliberate service stop. It adds no listener or Docker
-socket mount. The service is bounded by a timeout and exclusive lock, with journal errors on failure.
-
-The timer uses the same exclusive lock and only repairs differing Linux network namespace inodes.
-Same-namespace outages never trigger a gateway restart. Three failures within ten minutes latch a
-root-only, synced ledger and stop the timer until explicit operator reset; healthy checks write nothing.
+The Enclave runs as a systemd service on the server, not in a container: EKKA's own unit (`ekka enclave install-service`)
+with no new privileges, a read-only system, an empty capability set and no setuid, as the `ekka` user, which is in no
+Docker or sudo group. It shares nothing with the gateway but one socket folder, `/run/ekka`, through the `openshell` group.
+Because it runs on the host's network, the unit's protections, not a container, decide what it can read and reach; Docker's
+default seccomp profile does not apply to it. The vault under `/var/lib/ekka/.ekka` is readable by root, by the `ekka`
+user, and by anyone holding the Docker socket, which is root-equivalent on this machine. The rest of the stack runs under
+`ekka-desks.service`, bound to the Enclave, from a root-owned copy of `deploy/`; it never executes a person's checkout.
+See [restart recovery](OPERATIONS.md#the-enclave-as-a-service-and-restart-recovery).
