@@ -885,7 +885,7 @@ step_people() {
   (cd deploy && bash setup.sh people >/dev/null)
   configure_enclave_cli || die "the Enclave's public desk defaults could not be set; run the install again"
   local keys="       <your $AGENT key> | sudo ./up.sh connect $AGENT
-       Optional, for private repositories: <a read-only GitHub Contents token> | sudo ./up.sh connect github" desk="sudo ./up.sh ekka desk create code-desk --provider $AGENT   # add --provider github for private repositories"
+       Optional, for private repositories: <a read-only GitHub Contents token> | sudo ./up.sh connect github" desk="ekka desk create code-desk --provider $AGENT   # add --provider github for private repositories"
   # The browser's half of step 6, from the one file that writes it: printed, never run.
   local trust; trust=$(bash "$DESKS_STATE/people/trust-ca.sh" --all 2>&1 | sed 's/^/     /') || trust="     see docs/OPERATIONS.md, Certificates"
   printf '\n\033[1m-- installed --\033[0m\n%s\n' "The server is ready. Next (docs/SERVER.md, steps 5 to 8):
@@ -895,7 +895,7 @@ step_people() {
 $trust
   7. Connect the company's keys, once, on this server (each from a pipe, never an argument):
 $keys
-  8. On this server: sudo ./up.sh ekka desk login (read-only gateway sign-in); then: $desk
+  8. On this server, as root (sudo -i): ekka desk login (read-only gateway sign-in); then: $desk
 The Enclave registers each desk by itself, and your desks agent may work on it.
 For any desk but code-desk, give it its own plans once:   sudo ./up.sh desk-plans <desk>
 Then: docs/SET-UP-YOUR-DESK.md and docs/ASK-YOUR-CODE.md."
