@@ -17,6 +17,10 @@ WorkingDirectory=@@SNAPSHOT@@/deploy
 Environment=DESKS_STATE=@@DESKS_STATE@@
 # DESKS_STACK_SERVICES: the long-lived services, written by up.sh; the adapter joins the list only once its configuration exists.
 EnvironmentFile=@@DESKS_STATE@@/up.env
+# A hold: while up.sh is between the Enclave's first start and its client secret, the stack must not start (the gateway
+# would exit on a sign-in it cannot make, and the stack would abort around the steps that need Keycloak). up.sh writes
+# the hold first and removes it once the secret is in the vault; a held start fails at once and touches nothing.
+ExecStartPre=/usr/bin/test ! -e @@DESKS_STATE@@/stack.hold
 # No gateway before the Enclave's interceptor socket answers: fail closed, by a real connect, not a file test.
 ExecStartPre=/usr/local/libexec/ekka-desks/wait-interceptor /run/ekka/openshell-interceptor.sock 60
 # One-shot folders first (the gateway's and the adapter's state, owned by their users), run to completion.

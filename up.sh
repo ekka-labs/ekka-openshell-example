@@ -595,7 +595,7 @@ step_start() {
   local stack_sha; stack_sha=$( { cat deploy/compose.yml deploy/pins.json deploy/edge/nginx.conf deploy/host/ekka-desks.service.template "$DESKS_STATE/up.env"; } | sha256sum | cut -c1-16)
   if is_done started; then
     snapshot_stack; enclave_units
-    systemctl unmask ekka-desks >/dev/null 2>&1 || true   # a first install that died between mask and unmask
+    rm -f "$DESKS_STATE/stack.hold"; systemctl reset-failed ekka-desks >/dev/null 2>&1 || true   # a first install that died while held
     # The Enclave: the installed release runs, or it is restarted onto it (an upgrade is the binary first, then this).
     systemctl start ekka >/dev/null 2>&1 || die "the Enclave did not start; see: journalctl -u ekka"
     wait_enclave
@@ -616,19 +616,22 @@ step_start() {
     ok "Enclave $EKKA_VERSION (systemd: ekka) and the desks stack (systemd: ekka-desks) are running"; return; fi
   say "starting the Enclave and NVIDIA's gateway"
   local env=${EKKA_ENV:-prod}
+  # The Enclave's unit Wants the stack, and the stack's gateway cannot start before the Enclave holds its client secret
+  # (measured: the stack looped on a gateway that could not sign in, and knocked Keycloak over while the config and the
+  # secret were being fetched). So a HOLD file keeps the stack unit from starting for the whole first start (its first
+  # ExecStartPre tests for it), and the hold is removed once the secret is in the vault. The sign-in service is brought up
+  # by itself where a step needs it (setup.sh wait_keycloak).
+  touch "$DESKS_STATE/stack.hold"
+  systemctl stop ekka-desks >/dev/null 2>&1 || true; systemctl reset-failed ekka-desks >/dev/null 2>&1 || true
   (cd deploy && bash setup.sh enclave-config "$env" desks)
   snapshot_stack; enclave_units
-  # The Enclave's unit Wants the stack, and the stack's gateway cannot start before the Enclave holds its client secret
-  # (measured: the stack looped on a gateway that could not sign in, and knocked Keycloak over while the secret was being
-  # fetched). So the stack is MASKED for the first start, and unmasked once the secret is in the vault.
-  systemctl mask ekka-desks >/dev/null 2>&1 || true
   # `ekka secret put` talks to a running Enclave, so: start it, store the secret, restart it so it reads the secret.
   systemctl restart ekka || die "the Enclave did not start; see: journalctl -u ekka"
   wait_enclave
   (cd deploy && bash setup.sh enclave-secret "$env")
   systemctl restart ekka || die "the Enclave did not restart; see: journalctl -u ekka"
   wait_enclave
-  systemctl unmask ekka-desks >/dev/null 2>&1 || true
+  rm -f "$DESKS_STATE/stack.hold"; systemctl reset-failed ekka-desks >/dev/null 2>&1 || true
   systemctl restart ekka-desks || die "the desks stack did not start; see: journalctl -u ekka-desks"
   wait_gateway
   echo "$stack_sha" >"$DESKS_STATE/stack.sha"

@@ -238,10 +238,12 @@ class TheInstaller(unittest.TestCase):
     def test_the_first_start_masks_the_stack_until_the_secret_is_in_the_vault(self):
         fn = up_function("step_start")
         fresh = fn[fn.index("; return; fi"):]
-        self.assertLess(fresh.index("systemctl mask ekka-desks"), fresh.index("enclave-secret"))
-        self.assertLess(fresh.index("enclave-secret"), fresh.index("systemctl unmask ekka-desks"))
-        self.assertLess(fresh.index("systemctl unmask ekka-desks"), fresh.index("systemctl restart ekka-desks"))
-        self.assertIn("systemctl unmask ekka-desks", fn[:fn.index("; return; fi")], "a rerun repairs a first install that died masked")
+        self.assertLess(fresh.index('touch "$DESKS_STATE/stack.hold"'), fresh.index("enclave-config"), "before anything asks Keycloak")
+        self.assertLess(fresh.index("enclave-secret"), fresh.index('rm -f "$DESKS_STATE/stack.hold"'))
+        self.assertLess(fresh.index('rm -f "$DESKS_STATE/stack.hold"'), fresh.index("systemctl restart ekka-desks"))
+        self.assertIn('rm -f "$DESKS_STATE/stack.hold"', fn[:fn.index("; return; fi")], "a rerun repairs a first install that died while held")
+        u = read("deploy", "host", "ekka-desks.service.template")
+        self.assertLess(u.index("ExecStartPre=/usr/bin/test ! -e @@DESKS_STATE@@/stack.hold"), u.index("wait-interceptor"), "the hold is the first check")
 
     def test_the_main_sequence_installs_accounts_then_the_release_before_init(self):
         text = read("up.sh")
