@@ -34,7 +34,7 @@ jobs:
         run: |
           docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD":/kit:ro -w /kit \
             public.ecr.aws/amazonlinux/amazonlinux@sha256:c07ab0773eddf9449c0994a87d8148300db98bdf8d8dad672a9dc26321c104fc \
-            sh -c 'dnf install -q -y git-core openssl && git config --global --add safe.directory /kit \
+            sh -c 'dnf install -q -y git-core openssl findutils && git config --global --add safe.directory /kit \
                    && python3 --version && python3 -m unittest discover -s tests'
   pins:
     # NVIDIA signs neither the gateway nor the supervisor image, so this setup pins the binary: the committed
