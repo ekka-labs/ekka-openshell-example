@@ -1,8 +1,9 @@
 # The desks stack (sign-in, edge, NVIDIA's gateway, the backend adapter), supervised by systemd and BOUND to the
 # Enclave: it stops when the Enclave stops or fails, and starts when the Enclave starts (the Enclave's drop-in Wants
 # it). Compose runs in the FOREGROUND, so a container that exits ends this unit and systemd restarts it; `restart:`
-# policies in compose.yml are "no" on purpose. Written by up.sh from this template into /etc/systemd/system/.
-# It runs from a ROOT-OWNED snapshot of deploy/ (@@SNAPSHOT@@), never from a person's checkout.
+# policies in compose.yml are "no" on purpose. Written by up.sh from this template.
+# It runs from a ROOT-OWNED snapshot of deploy/ (@@SNAPSHOT@@), never from a person's checkout. up.sh writes it to
+# /usr/local/lib/systemd/system/, so `systemctl mask` can place its /dev/null link in /etc/systemd/system/ over it.
 [Unit]
 Description=EKKA desks stack (gateway, sign-in, edge, adapter)
 BindsTo=ekka.service
@@ -40,6 +41,11 @@ Restart=always
 RestartSec=5
 # A deliberate stop ends compose with 130 (SIGINT) or 143 (SIGTERM): that is success, not a failed unit (measured).
 SuccessExitStatus=130 143
+# A stop, a timeout or a failure between the detached pre-start above and the foreground start would leave Keycloak,
+# its database and the edge running under Docker with no unit holding them (Codex review of #4, finding 6). After every
+# stop the stack's services are stopped by name; on a normal stop they are already down and this changes nothing.
+# `-`: its exit status never marks the unit failed (Docker itself may be the one stopping).
+ExecStopPost=-/usr/bin/bash setup.sh compose --ansi never --progress plain stop -t 30 $DESKS_STACK_SERVICES
 TimeoutStopSec=90
 KillMode=mixed
 

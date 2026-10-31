@@ -289,6 +289,23 @@ env_dir() {  # where the Enclave keeps an environment's files in its home: prod 
   local e=${EKKA_ENV:-prod}; [[ $e == prod ]] && echo . || echo "$e"; }
 
 enrolled() { [[ -f $ENCLAVE_HOME/$(env_dir)/enclave.env ]]; }   # what `enclave start <id>` writes once the machine is claimed
+# The claim's transient unit (ekka-enroll), queried by name. `systemctl show` answers for a unit systemd no longer holds
+# too (LoadState=not-found, ActiveState=inactive, exit 0: measured on systemd 255), so an unloaded transient unit is a
+# REPORTED end state; a query that fails is an error of its own and never reads as "it stopped".
+claim_state() { local s; s=$(systemctl show -p ActiveState --value ekka-enroll.service 2>/dev/null) && [[ -n $s ]] || return 1; echo "$s"; }
+claim_gone() {  # the claim unit stopped: the stop's own exit status checked, then the end state read back
+  local load state
+  load=$(systemctl show -p LoadState --value ekka-enroll.service 2>/dev/null) && [[ -n $load ]] \
+    || die "systemd could not report the claim unit; nothing else was started. See: systemctl status ekka-enroll"
+  if [[ $load == loaded ]]; then
+    systemctl stop ekka-enroll.service \
+      || die "the claim process could not be stopped (systemctl stop failed); nothing else was started. See: systemctl status ekka-enroll"
+  fi
+  state=$(claim_state) || die "systemd could not report the claim's state after the stop; nothing else was started. See: systemctl status ekka-enroll"
+  [[ $state == inactive || $state == failed ]] \
+    || die "the claim process is still '$state' after the stop; nothing else was started. See: systemctl status ekka-enroll"
+  systemctl reset-failed ekka-enroll.service >/dev/null 2>&1 || true   # a failed transient unit lingers until this
+}
 
 ekka_in() { enclave_ekka "$@"; }   # the Enclave's own user and home (deploy/lib.sh); kept as the name the steps use
 
@@ -321,8 +338,9 @@ $(grep -E '^[[:space:]]*[*]?[[:space:]]*[a-z0-9-]+[[:space:]]' <<<"$orgs" | sed 
   # The output is kept BEFORE the id is looked for, so a refusal reaches the person: with `set -e`, a pipeline
   # whose grep finds nothing stopped this script with exit 1 and no message at all (an organization with no
   # Enclave slot left, measured 2026-10-31). EKKA's own sentence is what the person needs.
-  local created id
-  created=$(ekka_in enclave create --name "desks $(hostname -s)" 2>&1) || true
+  local created id create_rc=0
+  created=$(ekka_in enclave create --name "desks $(hostname -s)" 2>&1) || create_rc=$?
+  (( create_rc == 0 )) || die "EKKA did not create an Enclave: $created"
   id=$(grep -o -E '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$created" | head -1 || true)
   [[ -n $id ]] || die "EKKA did not create an Enclave: $(grep -v -E '^\s*$|Container |Network |Volume ' <<<"$created" | head -4 | tr '\n' ' ')"
   ok "Enclave $id created"
@@ -330,20 +348,24 @@ $(grep -E '^[[:space:]]*[*]?[[:space:]]*[a-z0-9-]+[[:space:]]' <<<"$orgs" | sed 
   # running. It runs as a TRANSIENT systemd unit, as the Enclave's user, so it has a managed lifecycle: stopped by
   # name with a deadline once claimed, never a backgrounded shell signalled through a wrapper (Codex review of #4,
   # reproduced hang). Its output is in the journal. The permanent unit runs it for good from then on (step_start).
-  systemctl stop ekka-enroll.service >/dev/null 2>&1 || true; systemctl reset-failed ekka-enroll.service >/dev/null 2>&1 || true
+  claim_gone   # a claim unit left by an earlier run is stopped first, and that stop must succeed
   systemd-run --unit=ekka-enroll --uid=ekka --gid=ekka -p TimeoutStopSec=30 -p KillMode=mixed \
     --setenv=PATH=/usr/local/bin:/usr/bin:/bin --setenv=HOME=/var/lib/ekka --setenv=EKKA_HOME="$ENCLAVE_HOME" --setenv=EKKA_ENV="$env" \
     /usr/local/bin/ekka enclave start "$id" --custody file >/dev/null 2>&1 \
     || die "the claim could not be started as a transient unit; see: journalctl -u ekka-enroll"
-  local i; for i in $(seq 1 60); do
+  # The wait reads the unit's state by name, and a state systemd cannot report is an error, never "it exited":
+  # Codex ran this function with the status query failing and watched it report the machine claimed (review of #4).
+  local i state; for i in $(seq 1 60); do
     enrolled 2>/dev/null && break
-    systemctl is-active --quiet ekka-enroll.service || break   # it exited: the journal says why
-    sleep 2; done
+    state=$(claim_state) || die "systemd could not report the claim's state; nothing else was started. See: systemctl status ekka-enroll"
+    case $state in
+      active|activating|reloading|deactivating) sleep 2 ;;
+      inactive|failed) break ;;   # it exited: the journal says why
+      *) die "the claim unit is in state '$state', which this installer does not expect; nothing else was started. See: systemctl status ekka-enroll" ;;
+    esac
+  done
   journalctl -u ekka-enroll.service --no-pager -o cat >"$DESKS_STATE/enclave-claim.log" 2>/dev/null || true
-  systemctl stop ekka-enroll.service >/dev/null 2>&1 || true   # SIGINT then SIGKILL after TimeoutStopSec; the lock is released either way
-  for i in $(seq 1 40); do systemctl is-active --quiet ekka-enroll.service || break; sleep 1; done
-  systemctl is-active --quiet ekka-enroll.service && die "the claim process did not stop within 40 s; nothing else was started. See: systemctl status ekka-enroll"
-  systemctl reset-failed ekka-enroll.service >/dev/null 2>&1 || true
+  claim_gone   # SIGTERM, then SIGKILL after TimeoutStopSec; a stop that fails is a refusal, never a claimed machine
   enrolled || die "the Enclave did not finish enrolling; see $DESKS_STATE/enclave-claim.log"
   ok "this machine is claimed by Enclave $id (vault key kept in a file)"
   # A new Enclave (a first install, or after `ekka enclave reset`) has none of what three marks say the old one had:
@@ -567,7 +589,15 @@ enclave_units() {  # the Enclave's unit from EKKA's own generator, this setup's 
     || die "ekka enclave install-service refused; see $DESKS_STATE/install-service.log"
   install -d -m 0755 /etc/systemd/system/ekka.service.d
   render deploy/host/ekka.service.d/desks.conf.template /etc/systemd/system/ekka.service.d/desks.conf 0644 "EKKA_ENV=${EKKA_ENV:-prod}" "ENCLAVE_HOME=$ENCLAVE_HOME"
-  render deploy/host/ekka-desks.service.template /etc/systemd/system/ekka-desks.service 0644 "SNAPSHOT=$SNAPSHOT" "DESKS_STATE=$DESKS_STATE"
+  # The stack's unit goes in the folder for units an administrator installs, NOT /etc/systemd/system: `systemctl mask`
+  # (the emergency stop in docs/OPERATIONS.md) places its /dev/null link at /etc/systemd/system/ekka-desks.service, and a
+  # regular unit file there could never be masked (Codex review of #4). A masked stack is a deliberate stop: refused here.
+  if [[ -L /etc/systemd/system/ekka-desks.service && $(readlink /etc/systemd/system/ekka-desks.service) == /dev/null ]]; then
+    die "ekka-desks is masked (the emergency stop in docs/OPERATIONS.md); nothing was changed. To continue: sudo systemctl unmask ekka-desks, then run this again"
+  fi
+  [[ -f /etc/systemd/system/ekka-desks.service && ! -L /etc/systemd/system/ekka-desks.service ]] && rm -f /etc/systemd/system/ekka-desks.service   # where an earlier install of this setup put it
+  install -d -m 0755 /usr/local/lib/systemd/system
+  render deploy/host/ekka-desks.service.template /usr/local/lib/systemd/system/ekka-desks.service 0644 "SNAPSHOT=$SNAPSHOT" "DESKS_STATE=$DESKS_STATE"
   systemctl daemon-reload
   systemctl enable ekka ekka-desks >/dev/null 2>&1 || die "the units could not be enabled"
 }
@@ -907,6 +937,8 @@ case "${1:-}" in
     ls -1 "$DONE" 2>/dev/null | sed 's/^/done: /' || echo "nothing done yet"
     if is_done started; then
       echo "ekka (the Enclave): $(systemctl is-active ekka 2>/dev/null)   ekka-desks (the stack): $(systemctl is-active ekka-desks 2>/dev/null)"
+      [[ $(systemctl is-enabled ekka-desks 2>/dev/null) == masked ]] && echo "ekka-desks is MASKED: the emergency stop (docs/OPERATIONS.md). Resume: sudo systemctl unmask ekka-desks && sudo systemctl start ekka-desks"
+      [[ $(systemctl show -p Result --value ekka-desks 2>/dev/null) == start-limit-hit ]] && echo "ekka-desks hit its start limit (ten starts in five minutes): sudo journalctl -u ekka-desks -n 50, then sudo systemctl reset-failed ekka-desks && sudo systemctl start ekka-desks"
       [[ -S /run/ekka/openshell-interceptor.sock ]] && echo "interceptor socket: present" || { echo "interceptor socket: MISSING"; exit 1; }
       docker ps --format '  {{.Names}}: {{.Status}}' --filter label=com.docker.compose.project=ekka-desks
       [[ $(systemctl is-active ekka) == active && $(systemctl is-active ekka-desks) == active ]] || exit 1
@@ -965,7 +997,9 @@ case "${1:-}" in
     exec bash tools/walk.sh ;;
   ekka)  # the ekka CLI of this server's Enclave, signed in as the person who installed it: ./up.sh ekka plan list
     [[ $(id -u) == 0 ]] || die "run with sudo"
-    shift; server_ekka "$@" ;;
+    # Its own exit: enclave_ekka RETURNS (the container version exec'd into compose and never came back), and without
+    # this the install sequence below ran after every `./up.sh ekka` (measured on the walk: "MODE: unbound variable").
+    shift; rc=0; server_ekka "$@" || rc=$?; exit $rc ;;
   desk-plans)  # the setup and ask plans for one more desk: sudo ./up.sh desk-plans <desk> [--private]
     [[ $(id -u) == 0 ]] || die "run with sudo"
     [[ -f $DESKS_STATE/up.env ]] || die "not installed yet"

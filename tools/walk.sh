@@ -14,7 +14,9 @@
 #
 # Settings (environment): WALK_REPO     a public repository to clone (default: GitHub's Hello-World)
 #                         DESKS_AGENT   the agent that owns desk plans (default: desks)
-#                         PERSON_EKKA   the person's ekka command (default: ekka, on their PATH)
+#                         PERSON_EKKA   the person's ekka command (default: /usr/local/bin/ekka, the binary itself: on this
+#                                       server /usr/local/sbin/ekka is the Enclave's root-only wrapper and comes first on
+#                                       PATH, while a person's own computer has only the binary)
 #                         WALK_SOAK     run setup and ask this many times each, all must complete (default 0: skipped)
 #                         WALK_PERSON_HOME  an EKKA home named .ekka-walk-person where walk-person signed in before
 #                                       the walk (the leg "who may use the desks" prints how); deleted after it
@@ -43,8 +45,8 @@ skip_leg() { SKIP=$((SKIP+1)); SKIPPED+=("$1: $2"); printf "  ${y}SKIP${n}  %-30
 # through EKKA, so the walk never reads a desk with the gateway administrator's CLI instead.
 NO_DESK_READ="reading a desk's files has no EKKA path in runner 0.1.111 (ekka desk shell and download are refused)"
 quiet() { sed -E '/^[[:space:]]*(STAGING|a rehearsal of production)/d'; }
-P() { sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" bash -lc "$(printf '%q ' "${PERSON_EKKA:-ekka}" "$@") 2>&1" | quiet; }
-Pin() { local input=$1; shift; printf '%s' "$input" | sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" bash -lc "$(printf '%q ' "${PERSON_EKKA:-ekka}" "$@") 2>&1" | quiet; }
+P() { sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" bash -lc "$(printf '%q ' "${PERSON_EKKA:-/usr/local/bin/ekka}" "$@") 2>&1" | quiet; }
+Pin() { local input=$1; shift; printf '%s' "$input" | sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" bash -lc "$(printf '%q ' "${PERSON_EKKA:-/usr/local/bin/ekka}" "$@") 2>&1" | quiet; }
 E() { ./up.sh ekka "$@" 2>&1 | quiet; }
 pin_state() {  # what the Enclave last reported for walk-desk: pinned | replaced | waiting
   local line; line=$(E desk list | grep -E "desks/$DESK " | head -1)
@@ -262,7 +264,7 @@ WP=${WALK_PERSON_HOME:-}
 if [[ -n $WP && $(basename "$WP") == .ekka-walk-person && -d $WP && ! -L $WP && -s $WP/openshell/person/ekka-desks.json ]]; then
   WP_LIVE=$WP   # from here, an aborted walk revokes walk-person and deletes this home (on_exit)
   desks_name=$(sed -n 's/^DESKS_NAME=//p' "$DESKS_STATE/up.env")
-  PP() { sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" EKKA_HOME="$WP" bash -lc "$(printf '%q ' "${PERSON_EKKA:-ekka}" "$@") 2>&1" | quiet; }
+  PP() { sudo -u "$WHO" -H env EKKA_ENV="$EKKA_ENV" EKKA_HOME="$WP" bash -lc "$(printf '%q ' "${PERSON_EKKA:-/usr/local/bin/ekka}" "$@") 2>&1" | quiet; }
   osh=$TMP/walk-person-openshell
   wp_os() {  # NVIDIA's CLI as walk-person: their token, from a 0600 file only it reads
     ( export HOME=$osh XDG_CONFIG_HOME=$osh/.config SSL_CERT_FILE=$DESKS_STATE/tls/ca.crt

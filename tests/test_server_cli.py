@@ -101,5 +101,25 @@ fi
         self.assertNotIn('PLANTED_PRIVATE_TOKEN',''.join(p.read_text() for p in self.capture.iterdir()))
 
 
+class TheEkkaVerbEnds(unittest.TestCase):
+    """`./up.sh ekka <command>` runs the command and EXITS. The native enclave_ekka returns where the container version
+    exec'd into compose, and the install sequence after the verb dispatch then ran on the walk box (measured:
+    "./up.sh: line 158: MODE: unbound variable" after a successful `whoami`)."""
+
+    def test_up_sh_ekka_exits_after_the_command_and_runs_no_install_step(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("id", "echo 0\n"), ("runuser", 'printf "%s\\n" "$@" > "$LOG"\n')):
+                Path(d, name).write_text("#!/bin/bash\n" + body); os.chmod(Path(d, name), 0o755)
+            env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], LOG=str(Path(d, "log")), DESKS_STATE=str(Path(d, "state")))
+            r = subprocess.run(["bash", str(ROOT/"up.sh"), "ekka", "whoami"], capture_output=True, text=True, env=env, timeout=30, cwd=ROOT)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stderr, "", "no install step spoke")
+            self.assertEqual(Path(d, "log").read_text().splitlines()[-1], "whoami")
+            # and a failing command's status is the verb's status
+            Path(d, "runuser").write_text("#!/bin/bash\nexit 7\n")
+            r = subprocess.run(["bash", str(ROOT/"up.sh"), "ekka", "whoami"], capture_output=True, text=True, env=env, timeout=30, cwd=ROOT)
+            self.assertEqual(r.returncode, 7)
+
+
 if __name__ == '__main__':
     unittest.main()

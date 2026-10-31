@@ -42,6 +42,9 @@ starts the stack; stopping or losing the Enclave stops it. Before the gateway st
 interceptor socket and waits up to a minute for an answer, so a gateway never runs without the Enclave that checks its
 calls. A container that exits, cleanly or not, ends the unit, and systemd starts it again (`Restart=always`); compose itself
 restarts nothing (`restart: "no"` everywhere). Only `systemctl stop` means stop, and only `systemctl mask` keeps it stopped.
+The unit file is `/usr/local/lib/systemd/system/ekka-desks.service` (the folder for units an administrator installs), so
+`systemctl mask` can put its `/dev/null` link at `/etc/systemd/system/ekka-desks.service` over it; `up.sh` refuses to run
+while that link is there, because a masked stack is a stop somebody meant.
 
 After a reboot or any doubt:
 

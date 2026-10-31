@@ -6,7 +6,9 @@ deploy/host, the unit `ekka enclave install-service` generates plus this setup's
 to the Enclave. Each test below reads the files as they ship; the live proofs are the walk on a server.
 """
 import os
+import pwd
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -72,6 +74,8 @@ class NoContainerEnclave(unittest.TestCase):
         self.assertIn("Restart=always", u, "a clean container exit is still a stack that stopped serving (Codex #4 finding 8)")
         self.assertIn("PartOf=docker.service", u, "a Docker restart restarts the stack (measured: Requires alone left it down)")
         self.assertIn("SuccessExitStatus=130 143", u, "a deliberate stop is not a failed unit (measured: compose exits 130)")
+        self.assertRegex(u, re.compile(r"^ExecStopPost=-/usr/bin/bash setup\.sh compose .*stop -t 30 \$DESKS_STACK_SERVICES$", re.M),
+                         "a stop between the detached pre-start and the foreground start leaves no container behind (Codex #4, third pass, finding 6)")
 
     def test_the_enclave_drop_in_adds_the_group_and_resets_the_writable_paths(self):
         d = read("deploy", "host", "ekka.service.d", "desks.conf.template")
@@ -107,10 +111,14 @@ class TheWrapper(unittest.TestCase):
 
     def test_it_refuses_an_environment_selector_flag(self):
         """`ekka --dev whoami` would pick another EKKA environment; this server has one (Codex #4, answer 5)."""
-        for flag in ("--dev", "--staging", "--env=staging"):
+        for flag in ("--dev", "--staging", "--env=staging", "--local", "--prod"):
             r = subprocess.run(["bash", self.PATH, flag, "whoami"], capture_output=True, text=True)
             self.assertEqual(r.returncode, 78, flag)
             self.assertIn("one environment", r.stderr)
+        # The runner reads the selector anywhere in the arguments, so the wrapper must too (Codex #4, third pass, finding 5).
+        for args in (["whoami", "--env", "staging"], ["whoami", "--env=dev"], ["enclave", "status", "--prod"], ["desk", "list", "--local"]):
+            r = subprocess.run(["bash", self.PATH, *args], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 78, args)
         r = subprocess.run(["bash", self.PATH, "--version"], capture_output=True, text=True)
         self.assertNotEqual(r.returncode, 78, "--version passes the flag check")
 
@@ -150,19 +158,21 @@ class HomeWritesAsTheEnclaveUser(unittest.TestCase):
             home = os.path.join(d, "home"); os.mkdir(home); shutil.chown(home, "ekka", "ekka"); os.chmod(home, 0o700)
             sentinel = os.path.join(d, "root-only"); os.mkdir(sentinel); os.chmod(sentinel, 0o700)   # root's, 0700
             os.symlink(sentinel, os.path.join(home, "plans"))                                           # planted by "ekka"
-            os.chown(os.path.join(home, "plans"), shutil._get_uid("ekka"), shutil._get_gid("ekka"), follow_symlinks=False)
-            script = f"ENCLAVE_USER=ekka; ENCLAVE_HOME={home}\n. {ROOT}/deploy/lib.sh\necho planted | enclave_home_file plans/p.json 0600"
+            ekka = pwd.getpwnam("ekka")
+            os.chown(os.path.join(home, "plans"), ekka.pw_uid, ekka.pw_gid, follow_symlinks=False)
+            # lib.sh sets ENCLAVE_HOME itself, so the fixture's home comes AFTER sourcing it (Codex #4, third pass, finding 3).
+            script = f". {ROOT}/deploy/lib.sh\nENCLAVE_USER=ekka; ENCLAVE_HOME={home}\necho planted | enclave_home_file plans/p.json 0600"
             r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
             st = os.stat(sentinel)
             self.assertEqual((st.st_uid, stat.S_IMODE(st.st_mode)), (0, 0o700), "root's folder is untouched")
             self.assertEqual(os.listdir(sentinel), [], "nothing was written through the link")
             self.assertNotEqual(r.returncode, 0, "and the write was refused, by name")
             self.assertIn("is a link", r.stderr)
-            r = subprocess.run(["bash", "-c", f"ENCLAVE_USER=ekka; ENCLAVE_HOME={home}\n. {ROOT}/deploy/lib.sh\necho ok | enclave_home_file notes/n.txt 0600"],
+            r = subprocess.run(["bash", "-c", f". {ROOT}/deploy/lib.sh\nENCLAVE_USER=ekka; ENCLAVE_HOME={home}\necho ok | enclave_home_file notes/n.txt 0600"],
                                capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             st = os.stat(os.path.join(home, "notes", "n.txt"))
-            self.assertEqual(st.st_uid, shutil._get_uid("ekka"))
+            self.assertEqual(st.st_uid, ekka.pw_uid)
             self.assertEqual(stat.S_IMODE(st.st_mode), 0o600)
 
 
@@ -170,9 +180,14 @@ class EnrollmentAndBackup(unittest.TestCase):
     def test_the_claim_runs_as_a_transient_unit_with_a_stop_deadline(self):
         fn = up_function("step_enroll")
         self.assertIn("systemd-run --unit=ekka-enroll --uid=ekka --gid=ekka", fn, "a managed lifecycle, not a backgrounded shell (Codex #4 finding 4)")
-        self.assertIn("systemctl stop ekka-enroll.service", fn)
-        self.assertIn("did not stop within 40 s", fn, "a deadline, and failure to stop is a refusal")
         self.assertNotIn("kill -INT", fn)
+        self.assertNotIn("is-active --quiet ekka-enroll", fn, "no yes/no query whose failure reads as 'it exited'")
+        self.assertNotIn("stop ekka-enroll.service >/dev/null 2>&1 || true", fn, "no ignored stop")
+        gone = up_function("claim_gone")
+        self.assertRegex(gone, r"systemctl stop ekka-enroll\.service \\\n\s+\|\| die", "the stop's own exit status is a refusal (Codex #4, third pass, finding 1)")
+        self.assertIn("inactive || $state == failed", gone, "an explicit end state, read back")
+        self.assertIn("could not report the claim", gone, "a query that fails is an error, never 'it stopped'")
+        self.assertNotIn("SIGINT", fn + gone, "systemd's default stop signal is SIGTERM")
 
     def test_backup_refuses_to_touch_state_after_a_failed_stop(self):
         b = read("deploy", "backup.sh")
@@ -236,6 +251,9 @@ class TheInstaller(unittest.TestCase):
         self.assertIn("ekka enclave install-service", fn)
         self.assertIn("ekka.service.d/desks.conf", fn)
         self.assertIn("systemctl enable ekka ekka-desks", fn)
+        self.assertIn("/usr/local/lib/systemd/system/ekka-desks.service", fn, "where `systemctl mask` can override it (Codex #4, third pass, finding 2)")
+        self.assertNotIn("template /etc/systemd/system/ekka-desks.service", fn)
+        self.assertIn("ekka-desks is masked", fn, "a masked stack is a stop somebody meant: refused, never un-masked by an install")
 
     def test_the_first_start_masks_the_stack_until_the_secret_is_in_the_vault(self):
         fn = up_function("step_start")
