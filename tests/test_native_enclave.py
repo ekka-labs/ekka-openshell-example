@@ -253,7 +253,10 @@ class TheInstaller(unittest.TestCase):
         self.assertIn("systemctl enable ekka ekka-desks", fn)
         self.assertIn("/usr/local/lib/systemd/system/ekka-desks.service", fn, "where `systemctl mask` can override it (Codex #4, third pass, finding 2)")
         self.assertNotIn("template /etc/systemd/system/ekka-desks.service", fn)
-        self.assertIn("ekka-desks is masked", fn, "a masked stack is a stop somebody meant: refused, never un-masked by an install")
+        self.assertIn("refuse_if_masked", fn, "a masked stack is a stop somebody meant: refused, never un-masked by an install")
+        self.assertIn("ekka-desks is masked", up_function("refuse_if_masked"))
+        pre = up_function("step_preflight")
+        self.assertIn("refuse_if_masked", pre, "refused before any step runs (measured: the step_start check came after settings, images and the release)")
 
     def test_the_first_start_masks_the_stack_until_the_secret_is_in_the_vault(self):
         fn = up_function("step_start")

@@ -86,6 +86,7 @@ step_preflight() {
   [[ $(uname -m) == x86_64 ]] || die "tested on x86_64 only so far"
   for t in curl python3 openssl sha256sum runuser systemctl; do command -v $t >/dev/null || die "$t is missing"; done
   [[ -d /run/systemd/system ]] || die "systemd is not running this machine; the Enclave runs as a systemd service"
+  refuse_if_masked   # first, so "nothing was changed" is true: measured on the walk box, the check inside step_start came after every earlier step
   command -v cosign >/dev/null || die "cosign is missing: the EKKA installer checks the release signature with it. Install it first:
   sudo curl -fsSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && sudo chmod +x /usr/local/bin/cosign"
   local abi; abi=$(landlock_abi)
@@ -579,6 +580,12 @@ snapshot_stack() {  # a ROOT-OWNED copy of deploy/ and tools/ the supervisor uni
   install -D -m 0755 -o root -g root deploy/host/libexec/wait-interceptor /usr/local/libexec/ekka-desks/wait-interceptor
 }
 
+refuse_if_masked() {  # a masked stack is a stop somebody meant (docs/OPERATIONS.md); an install never un-masks it
+  if [[ -L /etc/systemd/system/ekka-desks.service && $(readlink /etc/systemd/system/ekka-desks.service) == /dev/null ]]; then
+    die "ekka-desks is masked (the emergency stop in docs/OPERATIONS.md); nothing was changed. To continue: sudo systemctl unmask ekka-desks, then run this again"
+  fi
+}
+
 enclave_units() {  # the Enclave's unit from EKKA's own generator, this setup's drop-in, and the stack's unit
   # `ekka enclave install-service` writes /etc/systemd/system/ekka.service from the ENROLLED home and its owner, and
   # enables it. Run with the Enclave's home named, as root (it writes the unit), after enrollment.
@@ -592,9 +599,7 @@ enclave_units() {  # the Enclave's unit from EKKA's own generator, this setup's 
   # The stack's unit goes in the folder for units an administrator installs, NOT /etc/systemd/system: `systemctl mask`
   # (the emergency stop in docs/OPERATIONS.md) places its /dev/null link at /etc/systemd/system/ekka-desks.service, and a
   # regular unit file there could never be masked (Codex review of #4). A masked stack is a deliberate stop: refused here.
-  if [[ -L /etc/systemd/system/ekka-desks.service && $(readlink /etc/systemd/system/ekka-desks.service) == /dev/null ]]; then
-    die "ekka-desks is masked (the emergency stop in docs/OPERATIONS.md); nothing was changed. To continue: sudo systemctl unmask ekka-desks, then run this again"
-  fi
+  refuse_if_masked
   [[ -f /etc/systemd/system/ekka-desks.service && ! -L /etc/systemd/system/ekka-desks.service ]] && rm -f /etc/systemd/system/ekka-desks.service   # where an earlier install of this setup put it
   install -d -m 0755 /usr/local/lib/systemd/system
   render deploy/host/ekka-desks.service.template /usr/local/lib/systemd/system/ekka-desks.service 0644 "SNAPSHOT=$SNAPSHOT" "DESKS_STATE=$DESKS_STATE"
