@@ -98,7 +98,7 @@ class UpShUsesIt(unittest.TestCase):
     def test_the_upgrade_path_checks_the_edge_and_a_fresh_install_records_it(self):
         start = up_function("step_start")
         upgrade = start[:start.index("; return; fi")]
-        self.assertLess(upgrade.rindex("wait_gateway_loopback"), upgrade.rindex("edge_current"),
+        self.assertLess(upgrade.rindex("wait_gateway"), upgrade.rindex("edge_current"),
                         "after the stack is reconciled, before up.sh says it is running")
         fresh = start[start.index("; return; fi"):]
         self.assertIn('edge_conf_sha >"$DESKS_STATE/edge-conf.sha"', fresh)

@@ -138,6 +138,15 @@ step_host_accounts() {  # the Enclave's user and the shared group, made by syste
   ok "user ekka (uid 2000), group openshell (gid $(getent group openshell | cut -d: -f3)), folders /var/lib/ekka/.ekka, /run/ekka, /run/ekka-backend"
 }
 
+openshell_gid() { getent group openshell | cut -d: -f3; }
+
+host_env_files() {  # what the native Enclave and the installed `ekka` wrapper read: root-owned, no secret in either
+  install -d -m 0755 /etc/ekka
+  printf 'EKKA_ENV=%s\n' "${EKKA_ENV:-prod}" > /etc/ekka/desks.env.new && chmod 0644 /etc/ekka/desks.env.new && mv -f /etc/ekka/desks.env.new /etc/ekka/desks.env
+  # The Enclave reaches the issuer and the gateway by this machine's public name, through the edge on this machine.
+  grep -q " $NAME\$" /etc/hosts 2>/dev/null || getent hosts "$NAME" >/dev/null || echo "127.0.0.1 $NAME" >> /etc/hosts
+}
+
 step_settings() {
   install -d -m 0755 "$DESKS_STATE"
   local bind=0.0.0.0
@@ -156,7 +165,7 @@ step_settings() {
   # Read by deploy/setup.sh and by every compose call through `setup.sh compose`.
   { echo "DESKS_NAME=$NAME"; echo "DESKS_EDGE_BIND=$bind"; echo "DESKS_GATEWAY_BIND=$bind"
     echo "DESKS_DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
-    echo "DESKS_OPENSHELL_GID=$(getent group openshell | cut -d: -f3)"   # compose group_add: the gateway reaches the interceptor socket
+    echo "DESKS_OPENSHELL_GID=$(openshell_gid)"   # compose group_add: the gateway reaches the interceptor socket
     # The long-lived services ekka-desks.service runs in the foreground; the adapter joins once desk administration is on.
     if [[ -f $DESKS_STATE/backend/config.json ]]; then echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway ekka-backend"
     else echo "DESKS_STACK_SERVICES=keycloak-db keycloak edge gateway"; fi
@@ -170,11 +179,7 @@ step_settings() {
     echo "DESKS_ADDRESS=$addr"
     [[ $OPENSHELL_TELEMETRY == on ]] && echo "OPENSHELL_TELEMETRY_ENABLED=true" || echo "OPENSHELL_TELEMETRY_ENABLED=false"
   } > "$DESKS_STATE/up.env"
-  # The native Enclave and the installed `ekka` wrapper read the environment here; root-owned, no secret in it.
-  install -d -m 0755 /etc/ekka
-  printf 'EKKA_ENV=%s\n' "${EKKA_ENV:-prod}" > /etc/ekka/desks.env.new && chmod 0644 /etc/ekka/desks.env.new && mv -f /etc/ekka/desks.env.new /etc/ekka/desks.env
-  # The Enclave reaches the issuer and the gateway by this machine's public name, through the edge on this machine.
-  grep -q " $NAME\$" /etc/hosts 2>/dev/null || getent hosts "$NAME" >/dev/null || echo "127.0.0.1 $NAME" >> /etc/hosts
+  host_env_files
   ok "$MODE: $NAME, listening on $bind; NVIDIA OpenShell telemetry $OPENSHELL_TELEMETRY"
   [[ -f $DESKS_STATE/backend/config.json ]] \
     || echo "   the backend adapter starts once its configuration is written, after this machine is enrolled"
@@ -583,6 +588,7 @@ step_start() {
       systemctl start ekka-desks >/dev/null 2>&1 || die "the desks stack did not start; see: journalctl -u ekka-desks"
     fi
     wait_gateway
+    edge_current
     ok "Enclave $EKKA_VERSION (systemd: ekka) and the desks stack (systemd: ekka-desks) are running"; return; fi
   say "starting the Enclave and NVIDIA's gateway"
   local env=${EKKA_ENV:-prod}
@@ -635,7 +641,6 @@ install_plans() {
   local path code out identity rung
   # Every command in this loop gets /dev/null as input: otherwise the first one swallows the rest of the list.
   while read -r path code; do
-    install -d -m 0700 -o ekka -g ekka "$ENCLAVE_HOME/plans"
     enclave_home_file "plans/$(basename "$path")" 0600 < "$path"   # a file the Enclave's user may read
     out=$(ekka_in plan create "$ENCLAVE_HOME/plans/$(basename "$path")" 2>&1 </dev/null) \
       || die "the plan $code was not created: $(grep -v -E '^\s*$|STAGING|rehearsal' <<<"$out" | head -3 | tr '\n' ' ')

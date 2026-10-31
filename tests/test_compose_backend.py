@@ -17,7 +17,7 @@ import unittest
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 DEPLOY = os.path.join(ROOT, "deploy")
 IMAGE = "ghcr.io/ekka-labs/ekka-backend@sha256:" + "a" * 64
-BEFORE = ["edge", "ekka-enclave", "gateway", "gateway-init", "keycloak", "keycloak-db"]  # backend-init is desk-admin too
+BEFORE = ["edge", "gateway", "gateway-init", "keycloak", "keycloak-db"]  # backend-init is desk-admin too; the Enclave is a systemd unit
 
 
 def have_compose():
@@ -47,7 +47,7 @@ def config(profile=None, image=None, compose_text=None):
     os.makedirs(os.path.join(state, "secrets"))
     for f in ("keycloak-db.env", "keycloak.env"):
         open(os.path.join(state, "secrets", f), "w").close()
-    env = dict(os.environ, DESKS_STATE=state, DESKS_NAME="desks.example.test", DESKS_DOCKER_GID="999")
+    env = dict(os.environ, DESKS_STATE=state, DESKS_NAME="desks.example.test", DESKS_DOCKER_GID="999", DESKS_OPENSHELL_GID="990")
     env.pop("EKKA_BACKEND_IMAGE", None)
     if image:
         env["EKKA_BACKEND_IMAGE"] = image
@@ -87,22 +87,24 @@ class TheAdapterService(unittest.TestCase):
         volumes = {v["target"]: v for v in self.svc["volumes"] if v["type"] == "volume"}
         files = {v["target"]: v for v in self.svc["volumes"] if v["type"] == "bind"}
         self.assertEqual(sorted((v["source"], t) for t, v in volumes.items()),
-                         [("ekka-backend-sock", "/run/ekka-backend"), ("ekka-backend-state", "/var/lib/ekka-backend")],
-                         "the socket folder and the recovery store, and no other volume: no ekka-home")
-        # And two FILES, read-only: its configuration and the gateway's CA. Never a folder, never docker.sock.
-        self.assertEqual(sorted(files), ["/etc/ekka-backend/ca.pem", "/etc/ekka-backend/config.json"])
-        self.assertTrue(all(v.get("read_only") is True for v in files.values()))
-        self.assertEqual(sorted(os.path.basename(v["source"]) for v in files.values()), ["ca.crt", "config.json"])
+                         [("ekka-backend-state", "/var/lib/ekka-backend")],
+                         "the recovery store, and no other volume: no ekka-home")
+        # The socket folder is the host's /run/ekka-backend (tmpfiles, 0700 ekka), where the native Enclave dials it,
+        # and two FILES, read-only: its configuration and the gateway's CA. Never a folder of the home, never docker.sock.
+        self.assertEqual(sorted(files), ["/etc/ekka-backend/ca.pem", "/etc/ekka-backend/config.json", "/run/ekka-backend"])
+        self.assertEqual(files["/run/ekka-backend"]["source"], "/run/ekka-backend")
+        self.assertTrue(all(v.get("read_only") is True for t, v in files.items() if t != "/run/ekka-backend"))
+        self.assertEqual(sorted(os.path.basename(v["source"]) for v in files.values()), ["ca.crt", "config.json", "ekka-backend"])
         self.assertEqual(len(self.svc["volumes"]), 4)
 
     def test_reaches_only_the_gateway_and_the_sign_in_front(self):
         self.assertEqual(list(self.svc["networks"]), ["backend"])
         self.assertIs(self.on["networks"]["backend"].get("internal"), True, "no route out")
         on_backend = sorted(n for n, s in self.on["services"].items() if "backend" in (s.get("networks") or {}))
-        self.assertEqual(on_backend, ["edge", "ekka-backend", "ekka-enclave"])
+        self.assertEqual(on_backend, ["edge", "ekka-backend", "gateway"])
 
     def test_reaches_the_gateway_by_the_name_its_certificate_and_its_config_carry(self):
-        aliases = (self.on["services"]["ekka-enclave"]["networks"]["backend"] or {}).get("aliases") or []
+        aliases = (self.on["services"]["gateway"]["networks"]["backend"] or {}).get("aliases") or []
         # The adapter's configuration (tools/adapter_config.py, ADK-E3) names https://host.openshell.internal:8080.
         self.assertIn("host.openshell.internal", aliases)
 
@@ -116,9 +118,10 @@ class TheAdapterService(unittest.TestCase):
             self.assertIs(mounts[target].get("read_only"), True, target)
 
     def test_shares_its_socket_folder_with_the_enclave_only(self):
+        # The native Enclave dials /run/ekka-backend on the host (tmpfiles: 0700 ekka); only the adapter mounts it.
         holders = sorted(n for n, s in self.on["services"].items()
-                         if any(v.get("source") == "ekka-backend-sock" for v in s.get("volumes") or []))
-        self.assertEqual(holders, ["ekka-backend", "ekka-enclave"])
+                         if any(v.get("source") == "/run/ekka-backend" for v in s.get("volumes") or []))
+        self.assertEqual(holders, ["ekka-backend"])
         self.assertEqual(self.svc["healthcheck"]["test"], ["CMD", "/usr/local/bin/ekka-backend", "health"],
                          "the image is distroless: the binary checks itself")
 
@@ -154,14 +157,6 @@ class TheAdapterService(unittest.TestCase):
         self.assertTrue(waits_for_backend_init(self.on))
         self.assertFalse(waits_for_backend_init(config("desk-admin", IMAGE, compose_text=planted)),
                          "without the wait the adapter can start before its folder is the Enclave's user's")
-
-
-class TheEnclaveImage(unittest.TestCase):
-    def test_owns_the_socket_folder_so_the_new_volume_is_the_enclaves(self):
-        # A new named volume copies the folder's owner and mode from the first image that mounts it, and the
-        # Enclave starts first. Without this the folder is root's and the adapter cannot create its socket.
-        with open(os.path.join(DEPLOY, "enclave", "Dockerfile"), encoding="utf-8") as f:
-            self.assertIn("install -d -o 2000 -g 1000 -m 0700 /run/ekka-backend", f.read())
 
 
 if __name__ == "__main__":

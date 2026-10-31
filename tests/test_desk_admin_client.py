@@ -176,7 +176,7 @@ DESKS_STATE={state}
 ok() {{ echo "ok: $*"; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
 kc() {{ printf '%s' "$KC_SECRET"; return {kc_rc}; }}
-bash() {{ printf '%s\\n' "$@" > {seen}/args; cat > {seen}/stdin; }}
+ekka_in() {{ printf '%s\\n' "$@" > {seen}/args; cat > {seen}/stdin; }}
 cd {state}
 {up_function("connect_desk_admin")}
 connect_desk_admin
@@ -196,9 +196,8 @@ connect_desk_admin
         r, args, stdin, state = self.run_it()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(stdin, SECRET)
-        self.assertEqual(args[:5], ["setup.sh", "compose", "exec", "-T", "ekka-enclave"])
-        self.assertEqual(args[5:13], ["ekka", "api", "connect", "desks", "--input",
-                                      "socket=/run/ekka-backend/backend.sock", "--reach", "loopback"])
+        self.assertEqual(args[:7], ["api", "connect", "desks", "--input",
+                                   "socket=/run/ekka-backend/backend.sock", "--reach", "loopback"])
         self.assertIn("--stdin", args)
         self.assertNotIn(SECRET, " ".join(args), "never an argument")
         self.assertNotIn(SECRET, r.stdout + r.stderr, "never printed")

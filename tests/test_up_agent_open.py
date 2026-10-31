@@ -28,6 +28,7 @@ def run(reply=OPENED, rc=0, done=False, text=None, use="open", shown=None):
     script = f"""
 set -euo pipefail
 DESKS_STATE={state}; DESKS_AGENT=desks; DONE={state}/done; MODE_ARGS="server desks.example.test"
+ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
 ok() {{ echo "ok: $*"; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
 done_() {{ mkdir -p "$DONE"; touch "$DONE/$1"; }}

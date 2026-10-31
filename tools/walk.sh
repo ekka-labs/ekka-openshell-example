@@ -617,7 +617,8 @@ PY
   lock_holder_of() { cat "$desks_dir/.state/$1.lock" 2>/dev/null; }
   released() {  # no job and no change holds the desk: its state folder is there and its lock is not (a ready or
     # refused release removes the lock; an unknown one keeps it, marked). A lock that cannot be read is never released.
-    [[ -n $desks_dir ]] && test -d "$desks_dir/.state" && test ! -e "$desks_dir/.state/$1.lock" && echo released
+    [[ -n $desks_dir ]] && test -d "$desks_dir/.state" && ls "$desks_dir/.state" >/dev/null 2>&1 \
+      && test ! -e "$desks_dir/.state/$1.lock" && echo released
   }
   desk_containers() {  # the desk's containers as settle sees them, by OpenShell's labels: [[id, state, sandbox id]]
     python3 -c 'import json, sys; sys.path.insert(0, "tools"); import desks_settle as d; print(json.dumps(d.containers(sys.argv[1])))' "$1"

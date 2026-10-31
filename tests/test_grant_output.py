@@ -15,7 +15,7 @@ class GrantOutput(unittest.TestCase):
         end=source.index('  for g in ${decision#replace}',start)
         block=source[start:end]
         if old_pipe:
-            command=block[block.index('grant_out=$(')+len('grant_out=$('):block.index(') || die')]
+            command=block[block.index('grant_out=$(')+len('grant_out=$('):block.index(') \\\n    || {')]
             block='('+command+') | grep -q "Granted" || die refused\n'
         with tempfile.TemporaryDirectory() as temp:
             p=Path(temp);(p/'limits').write_text('{}')
@@ -31,6 +31,9 @@ sys.exit(7 if os.environ.get('FAIL_GRANT') else 0)
             (p/'docker').chmod(0o755)
             script='''set -euo pipefail
 die() { echo "$*" >&2; exit 1; }
+ENCLAVE_HOME=$TEST_ROOT; DESKS_AGENT=desks
+ekka_in() { docker "$@"; }
+enclave_home_file() { cat > "$ENCLAVE_HOME/$1"; }
 check_grant() {
 local limits="$TEST_ROOT/limits" gate=testGate
 '''+block+'''\necho confirmed

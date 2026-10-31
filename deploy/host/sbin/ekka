@@ -9,7 +9,7 @@ if [[ $(id -u) != 0 ]]; then
   exit 77
 fi
 env_file=/etc/ekka/desks.env    # EKKA_ENV, written by up.sh at install; prod when absent
-ekka_env=$(sed -n 's/^EKKA_ENV=//p' "$env_file" 2>/dev/null | head -1)
+ekka_env=$(sed -n 's/^EKKA_ENV=//p' "$env_file" 2>/dev/null | head -1 || true)   # absent file: prod
 # A clean environment on purpose: nothing a root shell carries (EKKA_HOME_OVERRIDE, a proxy, a different EKKA_ENV)
 # reaches the binary. The terminal type stays so an interactive session renders.
 exec runuser -u ekka -- /usr/bin/env -i \

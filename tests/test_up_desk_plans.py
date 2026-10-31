@@ -26,6 +26,9 @@ def run(reply, rc):
     script = f"""
 set -euo pipefail
 DESKS_STATE={state}; DESKS_AGENT=desks
+ENCLAVE_HOME=$DESKS_STATE/enclave-home
+ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
+enclave_home_file() {{ mkdir -p "$(dirname "$ENCLAVE_HOME/$1")"; cat > "$ENCLAVE_HOME/$1"; }}
 ok() {{ echo "ok: $*"; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
 docker() {{
@@ -85,12 +88,15 @@ class SharedDeskPlans(unittest.TestCase):
         script = f"""
 set -euo pipefail
 DESKS_STATE={state}; DESKS_AGENT=desks
+ENCLAVE_HOME=$DESKS_STATE/enclave-home
+ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
+enclave_home_file() {{ mkdir -p "$(dirname "$ENCLAVE_HOME/$1")"; cat > "$ENCLAVE_HOME/$1"; }}
 ok() {{ echo "ok: $*"; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
 docker() {{
   case "$*" in
-    *"plan create /tmp/plan-setup"*) echo "plan create setup" >> {calls}; printf '%s\\n' "${{CREATED//NAME/setup}}" ;;
-    *"plan create /tmp/plan-ask"*) echo "plan create ask" >> {calls}; printf '%s\\n' "${{CREATED//NAME/ask}}" ;;
+    *"plan create "*"/plans/plan-setup"*) echo "plan create setup" >> {calls}; printf '%s\\n' "${{CREATED//NAME/setup}}" ;;
+    *"plan create "*"/plans/plan-ask"*) echo "plan create ask" >> {calls}; printf '%s\\n' "${{CREATED//NAME/ask}}" ;;
     *"plan publish "*) echo "publish ${{@: -1}}" >> {calls}; printf '%s\\n' "✓ ${{@: -1}}: $PUBLISHED" ;;
     *"plan approve "*) echo "approve ${{@: -1}}" >> {calls}; printf '%s\\n' "✓ ${{@: -1}} $APPROVED" ;;
     *) return 0 ;;

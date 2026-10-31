@@ -465,19 +465,24 @@ class CommandLine(unittest.TestCase):
 
         def docker(args, stdin=None):
             calls.append(args)
-            if args[:4] == ["exec", ds.ENCLAVE, "ekka", "desk"]:
-                return 0, "code-desk  /var/lib/ekka/.ekka/home/desks/code-desk\n"
-            if args[:3] == ["exec", ds.ENCLAVE, "cat"]:
-                return 0, "attempt-7f2c\n"
             raise AssertionError(args)
+
+        def ekka(args):   # the native Enclave, as its user
+            calls.append(["ekka", *args])
+            self.assertEqual(args, ["desk", "list"])
+            return 0, "code-desk  /var/lib/ekka/.ekka/home/desks/code-desk\n"
+
+        def read(path):   # the lock, read in the Enclave's folder
+            calls.append(["read", path])
+            return "attempt-7f2c\n"
         state = tempfile.mkdtemp()
         os.makedirs(os.path.join(state, "backend"))
         with open(os.path.join(state, "backend", "config.json"), "w") as f:
             json.dump({"backend_gateway": {"url": "https://host.openshell.internal:8080", "workspace": "desks"}}, f)
         with mock.patch.dict(os.environ, {"DESKS_STATE": state}):
-            rc = ds.main(["code-desk", "--operation", OP], run=docker)
+            rc = ds.main(["code-desk", "--operation", OP], run=docker, ekka=ekka, read=read)
         self.assertEqual(rc, 0, "a desk held by a job is nothing to settle, not a failure")
-        self.assertIn(["exec", ds.ENCLAVE, "cat", "/var/lib/ekka/.ekka/home/desks/.state/code-desk.lock"], calls)
+        self.assertIn(["read", "/var/lib/ekka/.ekka/home/desks/.state/code-desk.lock"], calls)
         self.assertFalse(any(c[0] in ("restart", "run") for c in calls))
 
 
@@ -486,8 +491,8 @@ class NoAdapterConfig(unittest.TestCase):
         calls = []
         err = io.StringIO()
         with mock.patch.dict(os.environ, {"DESKS_STATE": tempfile.mkdtemp()}), redirect_stderr(err):
-            rc = ds.main(["code-desk", "--operation", OP], run=lambda a, s=None: calls.append(a) or
-                         (0, "code-desk  /var/lib/ekka/.ekka/home/desks/code-desk\n"))
+            rc = ds.main(["code-desk", "--operation", OP], run=lambda a, s=None: calls.append(a) or (0, ""),
+                         ekka=lambda a: (0, "code-desk  /var/lib/ekka/.ekka/home/desks/code-desk\n"))
         self.assertEqual(rc, 1)
         self.assertIn("the backend adapter's configuration is missing", err.getvalue())
         self.assertFalse(any(c[0] in ("restart", "run") for c in calls), "no hold, no restart")

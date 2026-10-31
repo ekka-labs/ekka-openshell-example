@@ -192,9 +192,10 @@ if a[:1] == ["compose"] and "ekka-backend" in a and "--from-gateway" in a:
     print(known[name]); sys.exit(0)
 if a[:1] == ["compose"]:
     rest = a[a.index("ekka-enclave") + 1:]
-    if rest[:1] == ["sh"]:
-        log(kind="add", limits=json.loads(sys.stdin.read()), agent=rest[3], gate=rest[4]); print("Granted: g-new"); sys.exit(0)
     cmd = rest[1:]
+    if cmd[:3] == ["gate", "grant", "add"]:
+        with open(cmd[cmd.index("--constraint") + 1]) as f: limits = json.load(f)
+        log(kind="add", limits=limits, agent=cmd[cmd.index("--agent") + 1], gate=cmd[cmd.index("--instance") + 1]); print("Granted: g-new"); sys.exit(0)
     if cmd == ["enclave", "status", "--json"]: print(json.dumps({"node_id": os.environ["NODE"]}))
     elif cmd == ["agent", "list", "--json"]: print(json.dumps({"agents": [{"agent_code": "desks", "agent_id": os.environ["AGENT"]}]}))
     elif cmd == ["gate", "list", "--json"]:
@@ -203,7 +204,9 @@ if a[:1] == ["compose"]:
     elif cmd == ["gate", "grant", "list", "--json"]: print(os.environ["GRANTS"])
     elif cmd[:3] == ["gate", "grant", "revoke"]: log(kind="revoke", grant=cmd[3])
     elif cmd[:2] == ["plan", "create"]:
-        name = os.path.basename(cmd[2]); log(kind="plan", name=name)
+        name = os.path.basename(cmd[2])
+        with open(cmd[2]) as f: log(kind="cp", name=name, plan=json.load(f), to=cmd[2])   # what the Enclave's user reads
+        log(kind="plan", name=name)
         if os.environ.get("PLAN_FAILS") == name: print("validation_error: refused for the test"); sys.exit(1)
         print("Plan created")
     else: raise SystemExit(f"unexpected {cmd}")
@@ -255,6 +258,9 @@ export DESKS_STATE={d}; DESKS_AGENT=desks   # exported, as up.sh:38 does: setup.
 say() {{ :; }}; ok() {{ echo "ok: $*"; }}; die() {{ echo "die: $*" >&2; exit 1; }}
 kc() {{ [ "$1 $2" = "admin-client on" ] && printf %s "{SECRET}"; }}
 profile_names() {{ printf '%s\\n' claude-code codex github; }}
+ENCLAVE_HOME=$DESKS_STATE/enclave-home
+ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
+enclave_home_file() {{ mkdir -p "$(dirname "$ENCLAVE_HOME/$1")"; cat > "$ENCLAVE_HOME/$1"; }}
 {up_functions("install_plans", "create_desk_admin_plans", "desk_provider_args", "step_desk_grant", up=up)}
 step_desk_grant
 """

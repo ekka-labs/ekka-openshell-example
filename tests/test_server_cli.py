@@ -38,7 +38,8 @@ fi
         self.env = dict(os.environ, ARG_LOG=str(self.log), CAPTURE=str(self.capture))
 
     def wrapper(self, args, terminal=False):
-        script = 'set -euo pipefail\ndie() { echo "$1" >&2; exit 2; }\n'+function('server_ekka')+'\nserver_ekka "$@"\n'
+        stub = 'enclave_ekka() { printf "%s\\0" "$@" >> "$ARG_LOG"; [[ -t 0 ]] || cat > "$CAPTURE/stdin"; }\n'
+        script = 'set -euo pipefail\ndie() { echo "$1" >&2; exit 2; }\n'+stub+function('server_ekka')+'\nserver_ekka "$@"\n'
         argv = ['/bin/bash','-c',script,'wrapper']+args
         if terminal:
             master, slave = pty.openpty()
@@ -56,13 +57,13 @@ fi
     def test_pipe_keeps_stdin_and_disables_tty(self):
         r=self.wrapper(['secret','put','TEST','--stdin'])
         self.assertEqual(r.returncode,0,r.stderr)
-        self.assertEqual(self.args(),['compose','exec','-T','ekka-enclave','ekka','secret','put','TEST','--stdin'])
+        self.assertEqual(self.args(),['secret','put','TEST','--stdin'], 'the ekka words, to the native Enclave as its user')
         self.assertEqual((self.capture/'stdin').read_text(),'public input')
 
     def test_real_terminal_allows_interactive_desk_login(self):
         r=self.wrapper(['desk','login'],terminal=True)
         self.assertEqual(r.returncode,0)
-        self.assertEqual(self.args(),['compose','exec','ekka-enclave','ekka','desk','login'])
+        self.assertEqual(self.args(),['desk','login'])
 
     def test_credential_options_are_not_forwarded_or_echoed(self):
         for option in ['--token','--access-token','--refresh-token','--id-token','--password','--client-secret','--api-key','--secret']:
@@ -89,11 +90,14 @@ fi
         public={'gateway':'ekka-desks','url':'https://gateway:8080'}
         (cli/'backend.json').write_text(json.dumps(public))
         self.env['DESKS_STATE']=str(state)
-        r=subprocess.run(['/bin/bash','-c','set -euo pipefail\n'+function('configure_enclave_cli')+'\nconfigure_enclave_cli'],
+        stubs=('ENCLAVE_HOME="$CAPTURE"\nenclave_home_file() { cat > "$CAPTURE/$1"; }\n'
+               'ekka_in() { printf "%s\\0" "$@" >> "$ARG_LOG"; }\n')
+        r=subprocess.run(['/bin/bash','-c','set -euo pipefail\n'+stubs+function('configure_enclave_cli')+'\nconfigure_enclave_cli'],
                          cwd=self.root,env=self.env,capture_output=True,text=True,timeout=10)
         self.assertEqual(r.returncode,0,r.stderr)
-        self.assertEqual({p.name for p in self.capture.iterdir()},{'desks-ca.pem','desk-policy.json','stdin'})
-        self.assertEqual(json.loads((self.capture/'stdin').read_text()),public)
+        self.assertEqual({p.name for p in self.capture.iterdir()},{'desks-ca.pem','desk-policy.json','backend.json'})
+        self.assertEqual(json.loads((self.capture/'backend.json').read_text()),public)
+        self.assertEqual(self.args(),['desk','backend','set',str(self.capture/'backend.json')])
         self.assertNotIn('PLANTED_PRIVATE_TOKEN',''.join(p.read_text() for p in self.capture.iterdir()))
 
 

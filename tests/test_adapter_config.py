@@ -143,7 +143,7 @@ class UpSh(unittest.TestCase):
 
     def test_only_the_three_lines_leave_the_enclaves_container(self):
         m = re.search(r"^write_adapter_config\(\) \{.*?^\}\n", self.text, re.S | re.M)
-        self.assertIn('grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$EKKA_HOME/enclave.env"', m.group(0))
+        self.assertIn('grep -E "^EKKA_(TENANT_ID|NODE_ID|GOVERN_URL)=" "$ENCLAVE_HOME/$(env_dir)/enclave.env"', m.group(0))
         self.assertNotRegex(m.group(0), r"\bcat\b", "never the whole file: it holds the node's secret")
 
     def test_the_step_waits_for_the_adapter_and_runs_after_the_gateway_setup(self):
@@ -154,6 +154,7 @@ DESKS_STATE=$1
 say() {{ echo "say $*"; }}
 connect_desk_admin() {{ echo CONNECT; }}
 write_adapter_config() {{ echo WRITE; }}
+systemctl() {{ :; }}; docker() {{ echo healthy; }}; ok() {{ :; }}; die() {{ echo "die: $*" >&2; exit 1; }}
 {m.group(0)}
 step_desk_admin
 """

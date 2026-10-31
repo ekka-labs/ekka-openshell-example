@@ -138,10 +138,9 @@ class ThePin(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no ekka-backend digest is pinned"):
             bi.image(dict(self.b, digest=None))
 
-    def test_the_cosign_image_is_the_one_the_enclave_build_already_trusts(self):
-        with open(os.path.join(ROOT, "deploy", "enclave", "Dockerfile")) as f:
-            m = re.search(r"^FROM (gcr\.io/projectsigstore/cosign:\S+) AS cosign$", f.read(), re.M)
-        self.assertEqual(self.b["cosign_image"], m.group(1), "one cosign, pinned once in each place, the same")
+    def test_the_cosign_image_is_pinned_by_digest(self):
+        # The Enclave itself is installed by EKKA's installer with the host's cosign; this image checks the adapter only.
+        self.assertRegex(self.b["cosign_image"], r"^gcr\.io/projectsigstore/cosign:v[0-9.]+@sha256:[0-9a-f]{64}$")
 
 
 class PullAndVerify(unittest.TestCase):
@@ -177,7 +176,7 @@ class UpSh(unittest.TestCase):
     def test_up_sh_runs_it(self):
         with open(os.path.join(ROOT, "up.sh"), encoding="utf-8") as f:
             text = f.read()
-        self.assertIn("step_images; step_backend_image; step_init;", text)
+        self.assertIn("step_images; step_backend_image; step_enclave_install; step_init;", text)
 
     def test_there_is_no_registry_login_for_a_public_image(self):
         with open(os.path.join(ROOT, "up.sh"), encoding="utf-8") as f:

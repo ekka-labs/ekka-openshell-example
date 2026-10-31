@@ -385,12 +385,11 @@ class TheWalk(unittest.TestCase):
         self.assertIn("released \"$SLOW\"", section)
         self.assertIn("desk_admin_checks.py exited", section)
 
-    def released_answers(self, desks_dir, desk="walk-desk", docker_works=True):
-        """Run the walk's own `released`, cut from tools/walk.sh, with `docker exec` run here on a folder."""
+    def released_answers(self, desks_dir, desk="walk-desk"):
+        """Run the walk's own `released`, cut from tools/walk.sh, on a folder (the native Enclave's, read in place)."""
         start = self.text.index("  released() {")
         body = self.text[start:self.text.index("\n  }\n", start) + 4]
-        docker = 'docker() { shift 2; "$@"; }' if docker_works else "docker() { return 1; }"
-        script = f"{body}\n{docker}\ndesks_dir={desks_dir!r}\nreleased {desk} || echo held\n"
+        script = f"{body}\ndesks_dir={desks_dir!r}\nreleased {desk} || echo held\n"
         r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
         return r.stdout.strip()
 
@@ -407,7 +406,12 @@ class TheWalk(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(self.released_answers(os.path.join(d, "not-the-desks")), "held", "a wrong folder")
             os.mkdir(os.path.join(d, ".state"))
-            self.assertEqual(self.released_answers(d, docker_works=False), "held", "docker cannot reach the Enclave")
+            os.chmod(os.path.join(d, ".state"), 0)   # a state folder that cannot be read: `test ! -e` would lie
+            try:
+                if os.geteuid() != 0:
+                    self.assertEqual(self.released_answers(d), "held", "a lock that cannot be read is never released")
+            finally:
+                os.chmod(os.path.join(d, ".state"), 0o700)
             self.assertEqual(self.released_answers(""), "held", "no desks folder found")
 
     def test_no_false_outage_proof_from_the_hosts_hosts_file(self):

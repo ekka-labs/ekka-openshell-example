@@ -304,7 +304,12 @@ def unhold(argv, run=docker):
         return 1
 
 
-def main(argv, run=docker):
+def read_text(path):
+    with open(path, encoding="utf-8") as f:   # the Enclave's folder, read as root
+        return f.read()
+
+
+def main(argv, run=docker, ekka=enclave_ekka, read=read_text):
     if argv[:1] == ["--unhold"]:
         return unhold(argv[1:], run)
     args = parse(argv)
@@ -316,7 +321,7 @@ def main(argv, run=docker):
         # The desk name is checked before it is part of any path.
         if not DESK.match(desk):
             raise Refused(f"'{desk}' is not a desk name")
-        rc, listing = enclave_ekka(["desk", "list"])
+        rc, listing = ekka(["desk", "list"])
         m = re.search(r"/var/lib/ekka/\S*/desks", listing) if rc == 0 else None
         if not m:
             raise Refused("the Enclave did not name its desks folder; is it running?")
@@ -324,8 +329,7 @@ def main(argv, run=docker):
 
         def read_lock():
             try:
-                with open(lock_path, encoding="utf-8") as f:   # the Enclave's folder, read as root
-                    return f.read()
+                return read(lock_path)
             except OSError:
                 return ""
 

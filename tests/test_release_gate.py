@@ -42,6 +42,8 @@ STUBS = """
 ok() { echo "ok: $*"; }
 die() { echo "die: $*" >&2; exit 1; }
 say() { :; }
+host_env_files() { :; }      # /etc/ekka/desks.env and /etc/hosts: root's, not a test's
+openshell_gid() { echo 990; }
 """
 
 
@@ -100,17 +102,13 @@ class UpShRefusesAnOlderEnclave(unittest.TestCase):
         # Enclave below a release that cannot be rolled back. Every fallback names a release the floor admits.
         with open(os.path.join(ROOT, "up.sh"), encoding="utf-8") as f:
             floor = re.search(r"^DESK_ADMIN_MIN_EKKA=(\S*)$", f.read(), re.M).group(1)
-        found = {}
-        for rel, pattern in (("deploy/compose.yml", r"\$\{EKKA_VERSION:-([^}]+)\}"),
-                             ("deploy/enclave/Dockerfile", r"^ARG EKKA_VERSION=(\S+)")):
-            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
-                found[rel] = re.findall(pattern, f.read(), re.M)
-        # The Enclave's build arg and its image.
-        self.assertEqual(len(found["deploy/compose.yml"]), 2, found)
-        self.assertEqual(len(found["deploy/enclave/Dockerfile"]), 1, found)
-        for rel, versions in found.items():
-            for v in versions:
-                self.assertEqual(gate(v, floor), 0, f"{rel} falls back to {v}, older than the floor {floor}")
+        # The Enclave is no longer a compose service: the release is pinned by up.sh alone (EKKA_VERSION, retained in
+        # up.env), installed by EKKA's installer. compose.yml carries NO EKKA_VERSION fallback at all.
+        with open(os.path.join(ROOT, "deploy", "compose.yml"), encoding="utf-8") as f:
+            self.assertEqual(re.findall(r"\$\{EKKA_VERSION[^}]*\}", f.read()), [])
+        with open(os.path.join(ROOT, "up.sh"), encoding="utf-8") as f:
+            default = re.search(r"retained \"\$DESKS_STATE\" EKKA_VERSION (\S+?)\)\}$", f.read(), re.M).group(1)
+        self.assertEqual(gate(default, floor), 0, f"up.sh falls back to {default}, older than the floor {floor}")
 
     def test_preflight_runs_the_gate(self):
         self.assertIn("release_gate", up_function("step_preflight"))
@@ -188,7 +186,7 @@ stat() {{ echo 999; }}
     def test_the_adapter_starts_only_after_its_configuration_is_written(self):
         body = up_function("step_desk_admin")
         written, on, started = (body.index("write_adapter_config"), body.index("COMPOSE_PROFILES=desk-admin"),
-                                body.index("up -d ekka-backend"))
+                                body.index("systemctl restart ekka-desks"))
         self.assertLess(written, on)
         self.assertLess(on, started)
 

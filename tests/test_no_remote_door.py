@@ -41,10 +41,12 @@ class TheComposeFile(unittest.TestCase):
             cmd = svc.get("command") or []
             self.assertNotEqual(list(cmd)[:2], ["artifacts", "serve"], f"{name} runs the download helper")
 
-    def test_the_enclave_reports_no_download_address(self):
-        env = self.c["services"]["ekka-enclave"].get("environment") or {}
-        for key in env:
-            self.assertFalse(key.startswith("EKKA_FETCH"), f"{key} would make the Enclave report a download address")
+    def test_no_service_carries_a_download_address(self):
+        for name, svc in self.c["services"].items():
+            for key in (svc.get("environment") or {}):
+                self.assertFalse(str(key).startswith("EKKA_FETCH"), f"{name}: {key} would make the Enclave report a download address")
+        # The Enclave itself is a systemd unit; its drop-in carries no download address either.
+        self.assertNotIn("EKKA_FETCH", read("deploy", "host", "ekka.service.d", "desks.conf.template"))
 
 
 class TheEdge(unittest.TestCase):

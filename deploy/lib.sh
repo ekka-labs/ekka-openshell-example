@@ -14,7 +14,8 @@ enclave_ekka() {  # enclave_ekka <ekka args...>: stdin, stdout and the exit stat
 
 enclave_home_file() {  # enclave_home_file <relative path> <mode> < content: a file the Enclave's user owns, written whole
   local rel=$1 mode=$2 tmp
-  tmp=$(mktemp -p "$ENCLAVE_HOME" ".write.XXXXXX")
+  install -d -m 0700 -o "$ENCLAVE_USER" -g "$ENCLAVE_USER" "$(dirname "$ENCLAVE_HOME/$rel")"
+  tmp=$(mktemp -p "$(dirname "$ENCLAVE_HOME/$rel")" ".write.XXXXXX")
   cat > "$tmp"
   chown "$ENCLAVE_USER:$ENCLAVE_USER" "$tmp"; chmod "$mode" "$tmp"
   mv -f "$tmp" "$ENCLAVE_HOME/$rel"
