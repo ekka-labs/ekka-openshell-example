@@ -63,6 +63,12 @@ class Enroll(unittest.TestCase):
         self.assertIn("ekka enclave revoke", r.stderr, "and so does its remedy")
         self.assertNotIn("enclave start", " ".join(r.calls), "nothing was started")
 
+    def test_a_refusal_with_an_id_is_never_claimed(self):
+        r = run(REFUSED + "request: 0d71efa2-91d3-418a-9c44-7cb734107dcf\n", 1)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no Enclave slots left", r.stderr)
+        self.assertNotIn("enclave start", " ".join(r.calls))
+
     def test_a_created_enclave_is_claimed(self):
         r = run(CREATED, 0)
         self.assertEqual(r.returncode, 0, r.stderr)
