@@ -126,6 +126,8 @@ step_host_accounts() {  # the Enclave's user and the shared group, made by syste
   local ogid; if ogid=$(getent group openshell | cut -d: -f3) && [[ -n $ogid && $ogid == 1000 ]]; then
     die "group 'openshell' has gid 1000, the first person's gid on Ubuntu; it must be its own group. Remove it and run again"
   fi
+  # Ubuntu ships neither folder until something needs it (measured on a fresh 24.04 server).
+  install -d -m 0755 /etc/sysusers.d /etc/tmpfiles.d
   install -m 0644 -o root -g root deploy/host/sysusers.d/ekka-desks.conf /etc/sysusers.d/ekka-desks.conf
   install -m 0644 -o root -g root deploy/host/tmpfiles.d/ekka-desks.conf /etc/tmpfiles.d/ekka-desks.conf
   systemd-sysusers ekka-desks.conf >/dev/null || die "systemd-sysusers could not make the ekka user and the openshell group"
