@@ -1,0 +1,71 @@
+{
+  "id": "bitbucket",
+  "displayName": "Bitbucket",
+  "description": "Bitbucket Cloud API and Git operations",
+  "category": "PROVIDER_PROFILE_CATEGORY_SOURCE_CONTROL",
+  "credentials": [
+    {
+      "name": "api_token",
+      "description": "Bitbucket scoped API token (repository read)",
+      "envVars": [
+        "BITBUCKET_TOKEN"
+      ],
+      "required": true,
+      "authStyle": "basic"
+    }
+  ],
+  "endpoints": [
+    {
+      "host": "api.bitbucket.org",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+    },
+    {
+      "host": "bitbucket.org",
+      "port": 443,
+      "protocol": "rest",
+      "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+      "rules": [
+        {
+          "allow": {
+            "method": "GET",
+            "path": "**"
+          }
+        },
+        {
+          "allow": {
+            "method": "HEAD",
+            "path": "**"
+          }
+        },
+        {
+          "allow": {
+            "method": "OPTIONS",
+            "path": "**"
+          }
+        },
+        {
+          "allow": {
+            "method": "POST",
+            "path": "/**/git-upload-pack"
+          }
+        }
+      ]
+    }
+  ],
+  "binaries": [
+    {
+      "path": "/usr/bin/git"
+    },
+    {
+      "path": "/usr/local/bin/git"
+    }
+  ],
+  "discovery": {
+    "credentials": [
+      "api_token"
+    ]
+  }
+}

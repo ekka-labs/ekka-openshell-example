@@ -4,14 +4,14 @@
 
 Add the repositories you want the agent to read. Run these commands on the **server**, from this repository's folder, after completing [server installation](SERVER.md).
 
-The agent does the cloning inside the desk. Public GitHub repositories need no token: the shipped policy lets `git` clone and fetch over HTTPS, with push blocked. Private repositories also need the GitHub connection; the gateway adds its read-only Contents token on the way to GitHub, so the agent never sees it.
+The agent does the cloning inside the desk. Public GitHub repositories need no token: the shipped policy lets `git` clone and fetch over HTTPS, with push blocked. Private repositories also need the GitHub connection; the gateway adds its read-only Contents token on the way to GitHub, so the agent never sees it. Bitbucket Cloud works the same way with the Bitbucket connection ([below](#bitbucket)).
 
 ## Before you start
 
 The server is installed, the Enclave has completed its browser sign-in, and the model API key is connected. A signed-in laptop client can inspect the connections:
 
 ```sh
-ekka desk connections               # lists your connected model and optional GitHub connection
+ekka desk connections               # lists your connected model and optional GitHub or Bitbucket connection
 ```
 
 If you followed the install guide, `code-desk` exists already, with its plans: skip to step 2.
@@ -102,5 +102,23 @@ answering. See [the desk's repository copies](ASK-YOUR-CODE.md#the-desks-reposit
 - The plan names a prompt, `desk-setup` version 3, that EKKA keeps and never changes. EKKA sends its text and SHA-256 in the signed request; your Enclave refuses the run if the text differs.
 - Your desks agent may run jobs on this workspace's desks because of one grant, made at install. `ekka gate grant list` shows it, with the command to take it back.
 - The desk could reach only GitHub and Anthropic. Only `claude` could use the Anthropic key, and only `git` and `gh` the GitHub token.
+
+## Bitbucket
+
+Repositories on Bitbucket Cloud need a Bitbucket connection: a scoped API token with `read:repository:bitbucket` only,
+made on an account used only by the agents. It reads every repository that account can read. Push stays denied.
+
+On the machine you installed on, as root (`sudo -i`):
+
+```sh
+read -rs KEY                                  # paste the token, press Enter; nothing shows
+echo "$KEY" | ekka desk connect bitbucket
+unset KEY
+ekka desk create code-desk --provider claude-code --provider bitbucket
+```
+
+Then clone with the setup plan as in step 2, with the repositories' `https://bitbucket.org/<workspace>/<repo>.git`
+addresses. The desk's git helper sends Bitbucket's fixed username for an API token, `x-bitbucket-api-token-auth`;
+the gateway adds the real token on the way to Bitbucket only.
 
 Next: [Ask your code a question](ASK-YOUR-CODE.md).

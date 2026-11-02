@@ -13,8 +13,9 @@ The limits are @ekka-ai/contracts governance/grant-constraints/desks.v1 for this
   policy_digests           `ekka-backend digest policy` over desk/policy.json, the reviewed baseline, from the
                            pinned adapter image: the adapter's own code, so the two never disagree.
   provider_config_digests  `ekka-backend digest provider` for each provider this gateway holds.
-  allowed_hosts            the ceiling: every host the shipped provider profiles name. A policy change may open
-                           no other host.
+  allowed_hosts            the ceiling: every host the profiles this install puts in the gateway name (--profile,
+                           from up.sh; every shipped profile when none is given). A policy change may open no
+                           other host.
   policy_baseline          all six must_equal parts; the shipped policy allows GitHub clone/fetch for git; port 443 only; no
                            address ranges; a provider adds network access only when it is listed.
   providers, environment_keys, repo_hosts, requires_role   as this setup installs them.
@@ -53,10 +54,12 @@ class Refused(Exception):
     pass
 
 
-def profile_hosts(providers_dir=os.path.join(ROOT, "providers")):
-    """Every endpoint host the shipped provider profiles name, sorted, each checked."""
+def profile_hosts(providers_dir=os.path.join(ROOT, "providers"), files=None):
+    """Every endpoint host the profiles name, sorted, each checked: `files`, the very profiles this install puts in
+    the gateway (up.sh passes them, an install's own providers.local file in place of a shipped one), or else every
+    shipped profile. One source: a profile the gateway holds can never sit outside the ceiling."""
     hosts = set()
-    for path in sorted(glob.glob(os.path.join(providers_dir, "*.yaml"))):
+    for path in (files if files else sorted(glob.glob(os.path.join(providers_dir, "*.yaml")))):
         with open(path, encoding="utf-8") as f:
             for m in re.finditer(r"^\s*-?\s*host:\s*([^\s#]+)\s*$", f.read(), re.M):
                 host = m.group(1).strip("'\"")
@@ -310,6 +313,7 @@ def main(argv, stdin=sys.stdin, now=None):
     lim.add_argument("--allowed-cidr", action="append", default=[], help="an address range the baseline allows (a discovery window)")
     lim.add_argument("--allowed-port", action="append", type=int, default=[], help="a port beside 443 the baseline allows")
     lim.add_argument("--allowed-host", action="append", default=[], help="a host a discovery window's packs name")
+    lim.add_argument("--profile", action="append", default=[], help="a profile file this install puts in the gateway; the ceiling is their hosts")
     cmp_ = sub.add_parser("compose", help="desk/policy.json with the named packs' rules, checked")
     cmp_.add_argument("packs"); cmp_.add_argument("--state", default=None)
     sub.add_parser("packs", help="the packs this install has").add_argument("--state", default=None)
@@ -334,7 +338,7 @@ def main(argv, stdin=sys.stdin, now=None):
                 providers[name] = digest
             with open(os.path.join(ROOT, "desk", "policy.json"), encoding="utf-8") as f:
                 policy = json.load(f)
-            print(json.dumps(limits(a.image_id, a.policy_digest, providers, profile_hosts(), policy,
+            print(json.dumps(limits(a.image_id, a.policy_digest, providers, profile_hosts(files=a.profile), policy,
                                     cidrs=a.allowed_cidr, ports=[443, *a.allowed_port], hosts=a.allowed_host), indent=2))
         elif a.cmd == "compose":
             with open(os.path.join(ROOT, "desk", "policy.json"), encoding="utf-8") as f:

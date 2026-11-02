@@ -65,7 +65,15 @@ class TheLimits(unittest.TestCase):
     def test_the_ceiling_is_every_host_the_shipped_profiles_name(self):
         self.assertEqual(build()["allowed_hosts"], sorted({
             "api.anthropic.com", "api.openai.com", "auth.openai.com", "chatgpt.com", "ab.chatgpt.com",
-            "api.github.com", "github.com"}))
+            "api.github.com", "github.com", "api.bitbucket.org", "bitbucket.org"}))
+
+    def test_given_the_profiles_the_gateway_holds_the_ceiling_is_exactly_their_hosts(self):
+        import tempfile
+        own = os.path.join(tempfile.mkdtemp(), "gitlab.yaml")
+        with open(own, "w") as f:
+            f.write("id: gitlab\nendpoints:\n  - host: gitlab.example.com\n    port: 443\n")
+        shipped = os.path.join(ROOT, "providers", "github.yaml")
+        self.assertEqual(dg.profile_hosts(files=[shipped, own]), ["api.github.com", "github.com", "gitlab.example.com"])
 
     def test_the_baseline_is_the_kits_policy_and_nothing_wider(self):
         lim = build()
@@ -315,7 +323,7 @@ CC = "sha256:" + "7" * 64
 
 
 def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH},claude-code={CC}", provider_fails="",
-             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None):
+             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None, own_profiles=None):
     import subprocess, tempfile
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "bin"))
@@ -326,6 +334,10 @@ def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH
             os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
             with open(os.path.join(d, rel), "w") as f:
                 f.write("{}")
+    for name, text in (own_profiles or {}).items():   # this install's own profiles, as an operator puts them there
+        os.makedirs(os.path.join(d, "providers.local"), exist_ok=True)
+        with open(os.path.join(d, "providers.local", name + ".yaml"), "w") as f:
+            f.write(text)
     if pre_limits is not None:   # the limits an earlier run wrote, as the box holds them
         os.makedirs(os.path.join(d, "backend"), exist_ok=True)
         with open(os.path.join(d, "backend", "desks-grant.json"), "w") as f:
@@ -341,11 +353,11 @@ set -euo pipefail
 export DESKS_STATE={d}; DESKS_AGENT=desks   # exported, as up.sh:38 does: setup.sh reads it
 say() {{ :; }}; ok() {{ echo "ok: $*"; }}; die() {{ echo "die: $*" >&2; exit 1; }}
 kc() {{ [ "$1 $2" = "admin-client on" ] && printf %s "{SECRET}"; }}
-profile_names() {{ printf '%s\\n' claude-code codex github; }}
+profile_names() {{ printf '%s\\n' bitbucket claude-code codex github {" ".join(own_profiles or {})}; }}
 ENCLAVE_HOME=$DESKS_STATE/enclave-home
 ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
 enclave_home_file() {{ mkdir -p "$(dirname "$ENCLAVE_HOME/$1")"; cat > "$ENCLAVE_HOME/$1"; }}
-{up_functions("install_plans", "create_desk_admin_plans", "desk_provider_args", "step_desk_grant", up=up)}
+{up_functions("install_plans", "create_desk_admin_plans", "desk_provider_args", "profile_source", "step_desk_grant", up=up)}
 step_desk_grant
 """
     env = dict(os.environ, PATH=f"{d}/bin:{os.environ['PATH']}", CALLS=calls, DESK_ID=IMAGE, POLICY_DIGEST=POLICY_DIGEST,
@@ -369,6 +381,17 @@ class UpShStep(unittest.TestCase):
         # The adapter's SERVICE, which mounts the configuration, is never run, and no grant changes. (The policy
         # digest before it runs the image alone, with no network and nothing mounted; it reads no configuration.)
         self.assertEqual([c["kind"] for c in seen if c["kind"] in ("provider", "add", "revoke")], [])
+
+    def test_an_installs_own_profile_puts_its_hosts_in_the_ceiling(self):
+        # A profile in providers.local reaches the gateway (sync_profiles); its hosts must reach the grant too, or
+        # a desk naming that provider is refused CONSTRAINT_ALLOWED_HOSTS.
+        own = "id: gitlab\nendpoints:\n  - host: gitlab.example.com\n    port: 443\n"
+        r, calls, _ = run_step(own_profiles={"gitlab": own})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [add] = [c for c in calls if c["kind"] == "add"]
+        self.assertIn("gitlab.example.com", add["limits"]["allowed_hosts"])
+        self.assertIn("bitbucket.org", add["limits"]["allowed_hosts"])
+        self.assertEqual(errors(add["limits"]), [])
 
     def test_no_grant_yet_adds_one_whose_limits_the_contract_accepts(self):
         r, calls, d = run_step()
@@ -434,7 +457,7 @@ class UpShStep(unittest.TestCase):
         import hashlib
         _, calls, _ = run_step()
         asks = [c for c in calls if c["kind"] == "provider"]
-        self.assertEqual(sorted(c["name"] for c in asks), ["claude-code", "codex", "github"])
+        self.assertEqual(sorted(c["name"] for c in asks), ["bitbucket", "claude-code", "codex", "github"])
         for c in asks:
             self.assertEqual(c["secret_sha"], hashlib.sha256(SECRET.encode()).hexdigest(), "on stdin")
             self.assertNotIn(SECRET, " ".join(c["argv"]), "never on the command line")

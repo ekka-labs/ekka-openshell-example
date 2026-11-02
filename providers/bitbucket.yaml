@@ -1,0 +1,41 @@
+# Bitbucket Cloud. EKKA's own profile: NVIDIA's OpenShell ships none for Bitbucket. Same shape as github.yaml.
+#
+# Client binaries:   git (git's git-remote-https helper matches by ancestry).
+# Credential:        a Bitbucket scoped API token with repository read (read:repository:bitbucket), on an
+#                    account used only by the agents. It reads every repository that account can read.
+#                    Git over HTTPS takes it with the fixed username `x-bitbucket-api-token-auth`; the desk
+#                    image's git helper (/usr/local/bin/ekka-git-credential) answers that for bitbucket.org.
+# Endpoint access:   api.bitbucket.org REST read-only; bitbucket.org clone/fetch only. Push
+#                    (git-receive-pack) stays denied.
+# Connect:           sudo ekka desk connect bitbucket   (the token on stdin)
+
+id: bitbucket
+display_name: Bitbucket
+description: Bitbucket Cloud API and Git operations
+category: source_control
+credentials:
+  - name: api_token
+    description: Bitbucket scoped API token (repository read)
+    env_vars: [BITBUCKET_TOKEN]
+    required: true
+    auth_style: basic
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: api.bitbucket.org
+    port: 443
+    protocol: rest
+    access: read-only
+    enforcement: enforce
+  # bitbucket.org is the git transport. Clone/fetch needs POST to */git-upload-pack, which the read-only
+  # preset blocks, so the rules are spelled out; push (git-receive-pack) stays denied.
+  - host: bitbucket.org
+    port: 443
+    protocol: rest
+    enforcement: enforce
+    rules:
+      - allow: { method: GET, path: "**" }
+      - allow: { method: HEAD, path: "**" }
+      - allow: { method: OPTIONS, path: "**" }
+      - allow: { method: POST, path: "/**/git-upload-pack" }
+binaries: [/usr/bin/git, /usr/local/bin/git]

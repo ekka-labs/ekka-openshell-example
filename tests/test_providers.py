@@ -1,4 +1,4 @@
-"""providers/ holds NVIDIA's profiles, with the JSON `ekka desk profile add` takes. Changed only where
+"""providers/ holds NVIDIA's profiles and EKKA's own (bitbucket), with the JSON `ekka desk profile add` takes. Changed only where
 PIN.json says why: the gateway binds a key to every host in its profile, so a profile names only
 hosts its key's own vendor runs."""
 import hashlib
@@ -14,6 +14,7 @@ VENDOR_HOSTS = {
     "claude-code": {"api.anthropic.com"},
     "codex": {"api.openai.com", "auth.openai.com", "chatgpt.com", "ab.chatgpt.com"},
     "github": {"api.github.com", "github.com"},
+    "bitbucket": {"api.bitbucket.org", "bitbucket.org"},
 }
 
 
