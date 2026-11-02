@@ -933,8 +933,15 @@ print(agent[0] if agent else "", api[0] if api else "")') || true
     while IFS= read -r word; do extra_args+=("$word"); done < <(python3 tools/desk_grant.py extras-args "$extras_file") \
       || die "the discovery window's extras could not be read; no grant was changed"
   fi
+  # The ceiling comes from the very profile files the gateway holds (sync_profiles imports the same ones), so a
+  # profile can never sit outside it: an install's own providers.local file in place of the shipped one.
+  local profile_args=() pname psrc
+  for pname in $(profile_names); do
+    psrc=$(profile_source "$pname") || die "profile $pname could not be read; no grant was changed"
+    profile_args+=(--profile "$psrc")
+  done
   # shellcheck disable=SC2086  # one --provider word and one name=digest word per provider; the extras expand to nothing when absent
-  python3 tools/desk_grant.py limits --image-id "$desk_id" --policy-digest "$pdig" $providers ${extra_args[@]+"${extra_args[@]}"} > "$limits.new" \
+  python3 tools/desk_grant.py limits --image-id "$desk_id" --policy-digest "$pdig" $providers "${profile_args[@]}" ${extra_args[@]+"${extra_args[@]}"} > "$limits.new" \
     || die "the desks grant's limits could not be written; no grant was changed"
   mv "$limits.new" "$limits"
   decision=$(ekka_in gate grant list --json | python3 tools/desk_grant.py decide "$id" "$gate" "$limits") \

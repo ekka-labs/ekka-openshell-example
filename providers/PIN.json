@@ -4,6 +4,8 @@
   "commit": "e1f3c82caa3ed3b65de22889ae7ef32a774878ef",
   "converter": "OpenShell's own profile parser (parse_profile_yaml, validate_before_lowering, to_proto) at the same commit",
   "files": {
+    "bitbucket.json": "4f96bf735a131d4f380a0c815d20654c422637d4701cb257e888478ce8975c41",
+    "bitbucket.yaml": "3c40a697a8a812b201b7a05691b78c0eb82829ba627f47507518eb9ce21e0bce",
     "claude-code.json": "10da40f3dde426548d7d820802acfce7bd4c1a1c0453afad00f541a5dfe7430b",
     "claude-code.yaml": "4e74c7a9d71ce991534b36ea1dd662765f61883e01820f6a116fe8b7d334bd1f",
     "codex.json": "15d0056f20d6db4df6570d5e7a2999f52c2fe2e54c87a60964a065018ecb7533",
@@ -12,6 +14,7 @@
     "github.yaml": "dc48407b3ab3b5004f3673aa3a76feae438c67fbe95354453f24f2c7bdf319a9"
   },
   "changes": {
-    "claude-code": "statsig.anthropic.com and sentry.io dropped, as the profile's own comment offers: the gateway binds a key to every host in its profile"
+    "claude-code": "statsig.anthropic.com and sentry.io dropped, as the profile's own comment offers: the gateway binds a key to every host in its profile",
+    "bitbucket": "EKKA's own profile, not NVIDIA's (OpenShell ships none for Bitbucket Cloud): github.yaml's shape for bitbucket.org and api.bitbucket.org. Its .json is in the same form, from a converter that reproduces NVIDIA's three generated files byte for byte"
   }
 }

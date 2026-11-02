@@ -216,7 +216,7 @@ Paste the API key only at that hidden prompt. The profile is called `claude-code
 
 Each connection also updates the desks grant, so a desk may be given that key right away ([Operations](OPERATIONS.md#connect-a-providers-key)).
 
-Public GitHub repositories need no token. For private repositories, run `sudo ekka desk connect github` with a read-only Contents token and add `--provider github` when creating the desk.
+Public GitHub repositories need no token. For private repositories, run `sudo ekka desk connect github` with a read-only Contents token and add `--provider github` when creating the desk. For Bitbucket Cloud, the same with `bitbucket` ([Set up a desk](SET-UP-YOUR-DESK.md#bitbucket)).
 
 ## 8. Make a desk for each agent
 

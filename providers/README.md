@@ -2,15 +2,16 @@
 
 [Back to the start](../README.md)
 
-A provider profile tells the OpenShell gateway three things about a key: which programs on a desk may use it, which hosts it may be sent to, and how it is sent. A profile's key is set on the server, from a pipe: `<key> | sudo ./up.sh connect <profile>` ([Operations](../docs/OPERATIONS.md#connect-a-providers-key)).
+A provider profile tells the OpenShell gateway three things about a key: which programs on a desk may use it, which hosts it may be sent to, and how it is sent. A profile's key is set on the server, from a pipe: `<key> | sudo ekka desk connect <profile>` ([Operations](../docs/OPERATIONS.md#connect-a-providers-key)).
 
-These are NVIDIA's own profiles from [OpenShell v0.1.3](https://github.com/NVIDIA/OpenShell/tree/v0.1.3/providers), with the changes below. `PIN.json` records NVIDIA's commit, each file's SHA-256 and every change.
+These are NVIDIA's own profiles from [OpenShell v0.1.3](https://github.com/NVIDIA/OpenShell/tree/v0.1.3/providers), with the changes below, and EKKA's own `bitbucket` (NVIDIA ships none). `PIN.json` records NVIDIA's commit, each file's SHA-256 and every change. Every profile here is loaded on every server; connecting its key is the only step.
 
 | Profile | For | The key | It may reach |
 |---|---|---|---|
 | `claude-code` | the Claude Code agent | an Anthropic API key | `api.anthropic.com` |
 | `codex` | the Codex agent | four ChatGPT sign-in tokens, one per command | `api.openai.com`, `auth.openai.com`, `chatgpt.com`, `ab.chatgpt.com` |
 | `github` | `git` and `gh` | a GitHub token | `github.com` (for `git`), `api.github.com` (read only) |
+| `bitbucket` | `git` | a Bitbucket scoped API token (repository read) | `bitbucket.org` (clone and fetch, for `git`), `api.bitbucket.org` (read only) |
 
 ## What we changed, and why
 
