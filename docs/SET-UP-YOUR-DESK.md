@@ -108,12 +108,17 @@ answering. See [the desk's repository copies](ASK-YOUR-CODE.md#the-desks-reposit
 Repositories on Bitbucket Cloud need a Bitbucket connection: a scoped API token with `read:repository:bitbucket` only,
 made on an account used only by the agents. It reads every repository that account can read. Push stays denied.
 
-On the machine you installed on, as root (`sudo -i`):
+On the machine you installed on:
 
 ```sh
 read -rs KEY                                  # paste the token, press Enter; nothing shows
-echo "$KEY" | ekka desk connect bitbucket
+echo "$KEY" | sudo ekka desk connect bitbucket
 unset KEY
+```
+
+Then make the desk with it, as root (`sudo -i`):
+
+```sh
 ekka desk create code-desk --provider claude-code --provider bitbucket
 ```
 
