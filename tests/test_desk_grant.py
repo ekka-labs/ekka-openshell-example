@@ -179,6 +179,26 @@ class TheDiscoveryWindow(unittest.TestCase):
         self.assertIn("DISCOVERY WINDOW open since 2026-10-31T16:00:00Z", dg.show(lim, w))
         self.assertIn("no discovery window", dg.show(build()))
 
+    def test_show_names_the_image_the_policy_and_the_providers_in_words(self):
+        # A client box, 3 Nov 2026: "providers: none   host ceiling: ..." on one line, and two bare digests. Nobody could
+        # tell which image or policy was granted, what "none" meant, or how to connect a key.
+        t = dg.show(build(provider_digests={}), None, ["claude-code", "github"])
+        self.assertIn("ekka-desk:local, built by the install\n      " + IMAGE, t)
+        self.assertIn("desk/policy.json, the shipped policy\n      " + POLICY_DIGEST, t)
+        self.assertIn("read the shipped policy:  cat " + os.path.abspath(os.path.join(ROOT, "desk", "policy.json")), t)
+        self.assertIn("none connected yet, so a desk can use no key.", t)
+        self.assertIn("on this server, not connected: claude-code, github", t)
+        self.assertIn("<the key> | sudo ekka desk connect <provider>", t)
+        t = dg.show(build(), None, ["claude-code", "github"])
+        self.assertIn("connected: github\n  on this server, not connected: claude-code\n", t)
+        # A discovery window's own image and policy are named from its record, never as the shipped ones.
+        w = {"images": ["sha256:" + "a" * 64], "policy_digests": ["sha256:" + "b" * 64], "image_ref": "ghcr.io/x/y@sha256:" + "a" * 64,
+             "policy_file": "/state/discovery-policy.json", "reason": "why", "since": "2026-11-03T21:00:00Z"}
+        t = dg.show(build(image_ids=[IMAGE, *w["images"]], policy_digests=[POLICY_DIGEST, *w["policy_digests"]]), w)
+        self.assertIn("the discovery image ghcr.io/x/y@sha256:" + "a" * 64 + "\n      sha256:" + "a" * 64, t)
+        self.assertIn("the discovery policy /state/discovery-policy.json\n      sha256:" + "b" * 64, t)
+        self.assertIn("ekka-desk:local, built by the install\n      " + IMAGE, t)
+
     def test_planted_a_policy_that_opens_nothing_is_refused(self):
         with self.assertRaisesRegex(dg.Refused, "nothing to open"):
             dg.window(POLICY | {"networkPolicies": {}}, self.PROJ, self.DISC, "r", "f", "why", "t")

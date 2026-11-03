@@ -263,18 +263,44 @@ def extras_args(extras):
     return words
 
 
-def show(lim, extras=None):
+def show(lim, extras=None, profiles=()):
+    """`sudo ekka desk grant show`: what a desk made through EKKA may use on this server, in words. Each digest
+    carries its name: the shipped ones are what the install granted (ekka-desk:local, desk/policy.json), and a
+    discovery window's are named from its own record."""
     net = lim["policy_baseline"]["network"]
-    lines = [f"images (by digest):   {', '.join(lim['image_digests'])}",
-             f"policies (by digest): {', '.join(lim['policy_digests'])}",
-             f"hosts the policy opens: {', '.join(net['allowed_hosts']) or 'none'}",
-             f"ports: {', '.join(map(str, net['allowed_ports']))}   address ranges: {', '.join(net['allowed_cidrs']) or 'none'}",
-             f"providers: {', '.join(lim['providers']) or 'none'}   host ceiling: {', '.join(lim['allowed_hosts'])}"]
+    extras = extras or {}
+    win_images, win_policies = set(extras.get("images", [])), set(extras.get("policy_digests", []))
+    def named(digest, window_name, shipped_name):
+        return f"  {window_name if digest in (win_images | win_policies) else shipped_name}\n      {digest}"
+    connected = list(lim["providers"])
+    waiting = [p for p in profiles if p not in connected]
+    lines = ["The desks grant: what a desk made through EKKA may use on this server", "",
+             "DESK IMAGE (a desk runs only this image)"]
+    lines += [named(d, f"the discovery image {extras.get('image_ref')}", "ekka-desk:local, built by the install")
+              for d in lim["image_digests"]]
+    lines += ["", "DESK POLICY (what a desk may reach on the network)"]
+    lines += [named(d, f"the discovery policy {extras.get('policy_file')}", "desk/policy.json, the shipped policy")
+              for d in lim["policy_digests"]]
+    lines += [f"  opens: {', '.join(net['allowed_hosts']) or 'no host'}, on port {', '.join(map(str, net['allowed_ports']))}",
+              f"  address ranges: {', '.join(net['allowed_cidrs']) or 'none'}",
+              f"  read the shipped policy:  cat {os.path.abspath(os.path.join(ROOT, 'desk', 'policy.json'))}",
+              "", "PROVIDERS (the keys a desk may use)"]
+    if connected:
+        lines.append(f"  connected: {', '.join(connected)}")
+    else:
+        lines.append("  none connected yet, so a desk can use no key.")
+    if waiting:
+        lines.append(f"  on this server, not connected: {', '.join(waiting)}")
+        lines.append("  connect one, the key piped in and never typed:  <the key> | sudo ekka desk connect <provider>")
+    if profiles:
+        lines.append(f"  what each provider may reach:  cat {os.path.abspath(os.path.join(ROOT, 'providers'))}/<provider>.yaml")
+    lines += ["", "HOSTS A PROVIDER MAY EVER REACH (the ceiling; a provider's own profile picks from these)",
+              f"  {', '.join(lim['allowed_hosts'])}", ""]
     if extras:
         lines.append(f"DISCOVERY WINDOW open since {extras.get('since')}: image {extras.get('image_ref')}, policy {extras.get('policy_file')}"
                      f" ({extras.get('reason')}). End it: sudo ekka desk grant restore")
     else:
-        lines.append("no discovery window: the shipped limits")
+        lines.append("no discovery window: the shipped limits are in force")
     return "\n".join(lines)
 
 
@@ -327,6 +353,7 @@ def main(argv, stdin=sys.stdin, now=None):
     win.add_argument("--since", default=None)
     ex = sub.add_parser("extras-args", help="the limits options a window adds, one per line"); ex.add_argument("extras_file")
     sh = sub.add_parser("show"); sh.add_argument("limits_file"); sh.add_argument("extras_file", nargs="?")
+    sh.add_argument("--profiles", default="", help="the profiles this server has, comma separated")
     a = p.parse_args(argv)
     try:
         if a.cmd == "limits":
@@ -367,7 +394,7 @@ def main(argv, stdin=sys.stdin, now=None):
             if a.extras_file and os.path.exists(a.extras_file):
                 with open(a.extras_file, encoding="utf-8") as f:
                     extras = json.load(f)
-            print(show(lim, extras))
+            print(show(lim, extras, [p for p in a.profiles.split(",") if p]))
         else:
             with open(a.limits_file, encoding="utf-8") as f:
                 wanted = json.load(f)
