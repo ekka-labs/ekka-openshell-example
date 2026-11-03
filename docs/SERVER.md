@@ -93,6 +93,8 @@ Then, in your provider's console, add the same rule in its network firewall: all
 
 Pick the name people will use. A VPN-only server needs no public DNS: use a name under `.internal`, which is reserved for private networks (for example `desks.internal`). Each person's install adds it to their hosts file.
 
+**The name is fixed once the server is set up.** Its certificate authority may only ever vouch for that name, so a second run under another name is refused and nothing is changed. To use a new name, [remove the server's desks](OPERATIONS.md#remove-the-servers-desks) and set it up again; everyone installs again for the new name.
+
 ```sh
 sudo EKKA_ORG=<your-org> ADMIN_EMAIL=<you@example.com> DESKS_ADDRESS=<server-ip-your-team-reaches> ./up.sh server desks.internal
 ```

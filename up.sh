@@ -109,6 +109,7 @@ step_preflight() {
   [[ $(uname -m) == x86_64 ]] || die "tested on x86_64 only so far"
   for t in curl python3 openssl sha256sum runuser systemctl; do command -v $t >/dev/null || die "$t is missing"; done
   [[ -d /run/systemd/system ]] || die "systemd is not running this machine; the Enclave runs as a systemd service"
+  refuse_if_renamed  # before anything is written: a new name would reach up.env and /etc/hosts and nothing init made
   refuse_if_masked   # first, so "nothing was changed" is true: measured on the walk box, the check inside step_start came after every earlier step
   command -v cosign >/dev/null || die "cosign is missing: the EKKA installer checks the release signature with it. Install it first:
   sudo curl -fsSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 && sudo chmod +x /usr/local/bin/cosign"
@@ -633,6 +634,19 @@ packs_local_safe() {  # this install's own packs: a root-owned folder of root-ow
     [[ -f $f && ! -L $f && $(stat -c '%u' "$f") == 0 && $(( 8#$(stat -c '%a' "$f") & 8#022 )) == 0 ]] \
       || die "$f must be a real file owned by root and writable by no one else"
   done
+}
+
+refuse_if_renamed() {  # the public name is bound at init, and a run under another name skipped init and changed nothing it binds
+  # The CA is name-constrained to the first name (deploy/certs.sh), so no certificate for a second name verifies; Keycloak's
+  # issuer and gateway.toml carry the first name too. Before this, such a run went on and pointed up.env, /etc/hosts, the
+  # gateway's registration and the adapter at the new name: a server that half-answered to each.
+  local was=""; [[ -f $DESKS_STATE/desks.env ]] && was=$(sed -n 's/^DESKS_NAME=//p' "$DESKS_STATE/desks.env")
+  [[ -n $was && $was != "$NAME" && -f $DESKS_STATE/tls/ca.crt ]] || return 0
+  die "this server was set up as $was, and you asked for $NAME; nothing was changed.
+  The name is fixed when the server is first set up: its certificate authority may only ever vouch for $was.
+  To keep it:            ./up.sh server $was
+  To use $NAME instead:  remove this server's desks first (docs/OPERATIONS.md, \"Remove the server's desks\"),
+                         then ./up.sh server $NAME. Everyone who installed for $was installs again."
 }
 
 refuse_if_masked() {  # a masked stack is a stop somebody meant (docs/OPERATIONS.md); an install never un-masks it
