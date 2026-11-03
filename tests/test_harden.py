@@ -54,9 +54,20 @@ class RunSshdBeforeTheCheck(unittest.TestCase):
         self.assertNotEqual(self.stubbed(never, present=False)[0], "install -d -o root -g root -m 0755 <dir>",
                             "PLANTED: a missing folder is not made")
         moved = harden().replace("\nprivsep_dir /run/sshd\n", "\n").replace(
-            'systemctl reload ssh\n', 'systemctl reload ssh\nprivsep_dir /run/sshd\n', 1)
+            'systemctl try-reload-or-restart ssh\n', 'systemctl try-reload-or-restart ssh\nprivsep_dir /run/sshd\n', 1)
         with self.assertRaises(AssertionError):
             self.assertLess(moved.index("\nprivsep_dir /run/sshd\n"), moved.index("\nsshd -t "))
+
+
+class SshReloadOnASocketActivatedServer(unittest.TestCase):
+    """Ubuntu 24.04 starts sshd on demand: on a server nobody has connected to over SSH, ssh.service is not
+    active and `systemctl reload ssh` fails, which stopped harden.sh before its firewall and Docker steps
+    (measured 2026-11-03, a fresh AWS box reached only through Session Manager)."""
+
+    def test_the_ssh_settings_are_applied_without_requiring_a_running_sshd(self):
+        body = harden()
+        self.assertIn("\nsystemctl try-reload-or-restart ssh\n", body)
+        self.assertNotIn("\nsystemctl reload ssh\n", body, "a bare reload fails on a server nobody has SSHed into")
 
 
 # ── #148: a Docker restart strands every desk ────────────────────────────────────────────────────────────────────
