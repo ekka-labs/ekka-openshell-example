@@ -1221,7 +1221,7 @@ case "${1:-}" in
         packs_local_safe; python3 tools/desk_grant.py packs --state "$DESKS_STATE"; exit 0 ;;
       show)
         [[ -f $limits ]] || die "no desks grant yet: the install writes it once the backend adapter is on"
-        python3 tools/desk_grant.py show "$limits" "$extras"; exit 0 ;;
+        python3 tools/desk_grant.py show "$limits" "$extras" --profiles "$(profile_names | paste -sd, -)"; exit 0 ;;
       discovery)  # ekka-ai/.github#784: open the grant for ONE project's discovery run, logged, until `restore`
         shift 2; ref=""; pol=""; packs=""
         while (( $# )); do case "$1" in --image) ref=${2:-}; shift 2 ;; --policy) pol=${2:-}; shift 2 ;; --packs) packs=${2:-}; shift 2 ;;
