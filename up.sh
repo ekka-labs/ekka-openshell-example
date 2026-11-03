@@ -39,7 +39,7 @@ cd "$(dirname "$0")"; ROOT=$PWD
 SNAPSHOT=/usr/local/lib/ekka-desks   # root-owned copy of deploy/ and tools/ the supervisor unit runs from
 export DESKS_STATE=${DESKS_STATE:-/var/lib/ekka-agent-desks}
 # A folder-mode rerun must keep this installation's environment and release, not reset them.
-EKKA_VERSION=${EKKA_VERSION:-$(python3 tools/workspace_policy.py retained "$DESKS_STATE" EKKA_VERSION 0.1.124)}
+EKKA_VERSION=${EKKA_VERSION:-$(python3 tools/workspace_policy.py retained "$DESKS_STATE" EKKA_VERSION 0.1.130)}
 EKKA_ENV=${EKKA_ENV:-$(python3 tools/workspace_policy.py retained "$DESKS_STATE" EKKA_ENV prod)}
 export EKKA_ENV
 AGENT=${AGENT:-claude-code}
