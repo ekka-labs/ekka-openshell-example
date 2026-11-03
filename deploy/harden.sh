@@ -134,7 +134,12 @@ EOF
 privsep_dir() { [[ -d $1 ]] || install -d -o root -g root -m 0755 "$1"; }
 privsep_dir /run/sshd
 sshd -t || die "the SSH settings do not parse; nothing was reloaded"
-systemctl reload ssh
+# Ubuntu 24.04 starts sshd ON DEMAND (ssh.socket): on a server nobody has connected to over SSH yet, ssh.service is
+# not running and `systemctl reload ssh` fails ("is not active, cannot reload"), which stopped this script before
+# the firewall and Docker steps. Measured 2026-11-03 on a fresh AWS box reached only through Session Manager.
+# `try-reload-or-restart` reloads a running sshd and does nothing to a stopped one: the next connection starts
+# sshd with the settings above.
+systemctl try-reload-or-restart ssh
 ok "root and passwords off; only $ADMIN_USER, by key"
 
 say "kernel settings"
