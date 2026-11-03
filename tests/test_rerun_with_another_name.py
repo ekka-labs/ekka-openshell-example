@@ -7,6 +7,7 @@ bash against a scratch state folder, and one runs the real CA commands to show w
 """
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -74,7 +75,7 @@ class ARerunUnderAnotherName(unittest.TestCase):
         self.assertEqual(steps[0], "step_preflight", "a step now runs before step_preflight, and could write first")
 
 
-@unittest.skipUnless(subprocess.run(["which", "openssl"], capture_output=True).returncode == 0, "no openssl")
+@unittest.skipUnless(shutil.which("openssl"), "no openssl")  # Amazon Linux 2023 has no `which`
 class WhyARenameCannotBePatchedOver(unittest.TestCase):
     def test_the_first_names_ca_cannot_vouch_for_a_second_name(self):
         d = tempfile.mkdtemp()
