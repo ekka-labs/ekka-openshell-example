@@ -48,8 +48,13 @@ services:
       KC_HEALTH_ENABLED: "true"         # management port 9000, never proxied
     depends_on:
       keycloak-db: {condition: service_healthy}
+    # Healthy means it ANSWERS sign-ins, not only that it is up. /health/ready says UP a few seconds before Keycloak
+    # finishes its bootstrap, and in that window every realm request gets a 503. The gateway starts on this check,
+    # reads the realm once, exits on the 503, and --abort-on-container-exit takes the whole stack down with it (the
+    # install's next Keycloak call then finds nothing). So the check also asks the master realm, which every
+    # Keycloak has from its first start, and passes only on a 200.
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3 && exec 4<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master/.well-known/openid-configuration HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&4 && grep -qE '^HTTP/1\\.[01] 200 ' <&4"]
       interval: 10s
       timeout: 5s
       retries: 30

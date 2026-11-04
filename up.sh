@@ -894,6 +894,12 @@ desk_provider_args() {  # --provider <name>=<digest>, one per provider this gate
   local p out err why
   err=$(mktemp)
   (cd deploy && bash setup.sh backend-preflight --always) || return 1   # the adapter runs by name below
+  # Keycloak first, on its own: inside the pipe below its failure reaches the adapter as an empty stdin, which the
+  # adapter can only report as SECRET_INVALID against whichever provider came first.
+  kc admin-client on >/dev/null 2>"$err" || {
+    why=$(tail -n1 "$err" | cut -c1-200); rm -f "$err"
+    echo "the sign-in service (Keycloak) did not give the adapter its secret (${why:-no reason given}); see: journalctl -u ekka-desks" >&2
+    return 1; }
   for p in $(profile_names); do
     if out=$( { kc admin-client on | (cd deploy && docker compose -f compose.yml --env-file "$DESKS_STATE/up.env" \
           run --rm -T --no-deps ekka-backend digest provider --from-gateway "$p" --config /etc/ekka-backend/config.json); } 2>"$err"); then
