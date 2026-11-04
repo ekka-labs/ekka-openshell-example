@@ -75,6 +75,9 @@ ADMIN_PLANS = (
     ("detach", "Remove a provider from a desk", "write", "DELETE",
      "/v1/desks/@input.desk/providers/@input.provider", ("desk", "provider", "body", "body_sha256")),
     ("status", "Read a desk", "read", "GET", "/v1/desks/@input.desk", ("desk",)),
+    # `ekka desk policy show` on the Enclave's own machine: the live policy, from contracts 0.75.0 `result.policy`,
+    # read back from the Enclave's local record of the step. A person's laptop reads with its own desk sign-in.
+    ("policyread", "Read a desk's live network policy", "read", "GET", "/v1/desks/@input.desk/policy", ("desk",)),
 )
 ADMIN_INPUTS = {
     "desk": "The desk's name.",

@@ -1,4 +1,4 @@
-"""The seven desk administration plans of an organization .
+"""The eight desk administration plans of an organization .
 
 `ekka desk <op>` runs one of them by name: one call through the Enclave's API gate to the backend adapter on
 `apis/desks`, run only by an organization admin, reading `outcome` and `desk_ready` from the adapter's answer.
@@ -32,10 +32,11 @@ INPUTS = {
     "policy": ["desk", "body", "body_sha256"],
     "detach": ["desk", "provider", "body", "body_sha256"],
     "status": ["desk"],
+    "policyread": ["desk"],
 }
 # Each plan's operation in the adapter contract.
 CONTRACT_OP = {"create": "create", "delete": "delete", "stop": "stop", "start": "start", "policy": "policy_set",
-               "detach": "provider_detach", "status": "status"}
+               "detach": "provider_detach", "status": "status", "policyread": "policy_get"}
 
 
 def vendored(path):
@@ -183,6 +184,30 @@ class Refused(unittest.TestCase):
     def test_an_operation_that_is_not_a_plan(self):
         with self.assertRaises(ValueError):
             desk_plans.admin_plan("connect", GATE)
+
+
+class ThePolicyRead(unittest.TestCase):
+    """`ekka desk policy show` on the Enclave's machine runs ekka.desk.policyread.v1 (ekka-ai/.github#814)."""
+
+    def setUp(self):
+        self.plan = desk_plans.admin_plan("policyread", GATE, "agent-1")
+
+    def test_is_the_plan_the_runner_runs(self):
+        self.assertEqual(self.plan["plan"]["code"], "desk.policyread.v1")
+
+    def test_is_a_read_of_the_policy_route_with_no_body(self):
+        s = step(self.plan)
+        self.assertEqual((s["op"], s["feature"]), ("read", "api.read"))
+        self.assertEqual(s["inputs"]["key"], "/v1/desks/@input.desk/policy")
+        self.assertEqual(s["inputs"]["expect"], {"status": 200})
+        self.assertNotIn("body_sha256", s["inputs"])
+        self.assertNotIn("value", s["inputs"])
+
+    def test_reads_the_route_the_contract_names_for_the_policy(self):
+        routes = {o["operation"]: o for o in vendored("backend/operations.json")["operations"]}
+        get = routes["policy_get"]
+        self.assertEqual((get["method"], get["mutates"]), ("GET", False))
+        self.assertEqual(get["path"].replace("{name}", "@input.desk"), step(self.plan)["inputs"]["key"])
 
 
 class TheTool(unittest.TestCase):

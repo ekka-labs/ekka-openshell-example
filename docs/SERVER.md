@@ -116,7 +116,7 @@ What it sets up, in order:
 4. NVIDIA's provider profiles from `providers/`.
 5. People's sign-ins to the desks, set to read only.
 6. Desk administration through EKKA: the backend adapter (its image pulled by digest and its signature checked), its configuration, and its credential in the Enclave's vault.
-7. A desks agent, the two example plans for `code-desk` and the seven desk administration plans (`ekka.desk.<op>.v1`).
+7. A desks agent, the two example plans for `code-desk` and the eight desk administration plans (`ekka.desk.<op>.v1`).
 8. Two grants for the desks agent: it may run jobs on every desk on this server, and it may administer desks within limits (the desk image, the desk policy and the connected keys). Take the first back with the command it prints.
 
 The Developer and Enterprise editions include desk jobs. If setup refuses a job permission, keep the exact error and check your active organization and edition with `ekka org edition` before contacting EKKA.

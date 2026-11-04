@@ -501,15 +501,15 @@ class UpShStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([c for c in calls if c["kind"] == "add"][0]["limits"]["providers"], [])
 
-    # The walk on a clean box (regression coverage, 2026-10-19): no step created the seven desk
+    # The walk on a clean box (regression coverage, 2026-10-19): no step created the desk
     # administration plans, so no plan declared api.write on the desks agent, and EKKA refused the grant:
     # "This agent does not declare 'api.write'".
     ADMIN_PLANS = {f"plan-desk-{op}.json": f"desk.{op}.v1"
-                   for op in ("create", "delete", "stop", "start", "policy", "detach", "status")}
+                   for op in ("create", "delete", "stop", "start", "policy", "detach", "status", "policyread")}
 
     def assert_admin_plans_made_before_any_add(self, calls):
         made = [c["name"] for c in calls if c["kind"] == "plan"]
-        self.assertEqual(sorted(made), sorted(self.ADMIN_PLANS), "all seven, each once")
+        self.assertEqual(sorted(made), sorted(self.ADMIN_PLANS), "all eight, each once")
         copied = {c["name"]: c["plan"] for c in calls if c["kind"] == "cp"}
         for name, code in self.ADMIN_PLANS.items():
             plan = copied[name]
@@ -520,7 +520,7 @@ class UpShStep(unittest.TestCase):
             self.assertLess(max(i for i, k in enumerate(kinds) if k == "plan"), kinds.index("add"),
                             "the plans exist before the grant is asked for")
 
-    def test_the_seven_admin_plans_are_made_before_the_grant(self):
+    def test_the_eight_admin_plans_are_made_before_the_grant(self):
         r, calls, _ = run_step()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assert_admin_plans_made_before_any_add(calls)
