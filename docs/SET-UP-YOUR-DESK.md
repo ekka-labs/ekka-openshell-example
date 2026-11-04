@@ -4,7 +4,7 @@
 
 Add the repositories you want the agent to read. Run these commands on the **server**, from this repository's folder, after completing [server installation](SERVER.md).
 
-The agent does the cloning inside the desk. Public GitHub repositories need no token: the shipped policy lets `git` clone and fetch over HTTPS, with push blocked. Private repositories also need the GitHub connection; the gateway adds its read-only Contents token on the way to GitHub, so the agent never sees it. Bitbucket Cloud works the same way with the Bitbucket connection ([below](#bitbucket)).
+The desk does the cloning itself, with a fixed command and no AI. Public GitHub repositories need no token: the shipped policy lets `git` clone and fetch over HTTPS, with push blocked. Private repositories also need the GitHub connection; the gateway adds its read-only Contents token on the way to GitHub, so the agent never sees it. Bitbucket Cloud works the same way with the Bitbucket connection ([below](#bitbucket)).
 
 ## Before you start
 
@@ -48,7 +48,7 @@ plans to yourself, add `--private`: `sudo ekka desk plans business-desk --privat
 
 ## 2. Clone your repositories
 
-**Why:** the agent does the cloning, inside the desk. Your GitHub token stays in the gateway, and EKKA's record says exactly which commits arrived.
+**Why:** the desk clones them itself, with one fixed command and no AI. Your GitHub token stays in the gateway, and EKKA's record says exactly which commits arrived.
 
 On the machine where you installed:
 
@@ -61,24 +61,43 @@ ekka plan run ekka.example.desk.setup.codeDesk.v1 \
 ✓ Plan completed (run 3f2a9c1e-...).
 ```
 
-For each repository, the agent:
+To clone a branch other than the repository's default, end the address with `#<branch>`:
 
-- clones it into `/sandbox/ekka-workspace/<name>` if it is absent;
-- reuses an existing checkout, preserving its branch, commit and uncommitted changes, and reports it as reused;
-- leaves a folder that is not that repository alone, and reports it as skipped;
+```sh
+ekka plan run ekka.example.desk.setup.codeDesk.v1 \
+  --input 'repos=["https://bitbucket.org/your-workspace/api.git#develop"]'
+```
+
+The plan runs [`desk/setup/desk-setup.sh`](../desk/setup/desk-setup.sh) on the desk. For each repository it:
+
+- accepts only `https://github.com/<owner>/<repo>` or `https://bitbucket.org/<workspace>/<repo>`, optionally ending
+  `.git` and `#<branch>`, with no user name or password in it; a branch is letters, digits and `. _ - /`, and a name
+  `git check-ref-format --branch` accepts;
+- clones it into `/sandbox/ekka-workspace/<name>` if that folder is absent, on the branch asked for;
+- reuses an existing checkout of the same address as it is, on its branch and commit, with its uncommitted changes,
+  and reports it as reused. It fetches, pulls, resets and switches nothing;
+- fails a repository by name when its folder is on another branch than the one asked for (it is never switched), or
+  holds anything other than that repository;
 - deletes or overwrites nothing else, and never stores a credential.
 
-The plan fails unless every repository is ready, so a skipped or failed repository is never reported as success. The counts are part of the signed record:
+The plan fails unless every repository is ready, so a failed repository is never reported as success. The counts are part of the signed record:
 
 ```text
 cloned=2 reused=0 updated=0 reset=0 skipped=0 failed=0 result=ready
 ```
 
+A repository already on the desk keeps its branch. Asking for another one fails that repository by name, with
+the branch it is on and the branch asked for; setup never switches it.
+
+Until the ask plan's next release, an ask recreates each repository copy on its default branch before it answers
+([the desk's repository copies](ASK-YOUR-CODE.md#the-desks-repository-copies)), so it does not keep a branch setup
+cloned, and it takes GitHub addresses only.
+
 ## 3. See what is on the desk
 
 **Why:** you know exactly which commit of each repository the agent will read.
 
-The agent writes a map of every repository, its branch and commit. Ask it to read that map and report what is ready:
+Setup writes a map of every repository, its branch and commit. Ask it to read that map and report what is ready:
 
 ```sh
 ekka plan run ekka.example.desk.ask.codeDesk.v1 \
@@ -99,7 +118,7 @@ answering. See [the desk's repository copies](ASK-YOUR-CODE.md#the-desks-reposit
 
 ## What made this safe
 
-- The plan names a prompt, `desk-setup` version 3, that EKKA keeps and never changes. EKKA sends its text and SHA-256 in the signed request; your Enclave refuses the run if the text differs.
+- The plan's command, the whole script included, is part of the plan. EKKA signs it into the request; your Enclave runs exactly that command and nothing else. No AI takes part in setup.
 - Your desks agent may run jobs on this workspace's desks because of one grant, made at install. `ekka gate grant list` shows it, with the command to take it back.
 - The desk could reach only GitHub and Anthropic. Only `claude` could use the Anthropic key, and only `git` and `gh` the GitHub token.
 
