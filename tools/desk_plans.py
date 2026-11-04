@@ -1,4 +1,5 @@
-"""The example plans for one desk: setup and ask, from the templates in ekka/plans/.
+"""The example plans for one desk: setup and ask, from the templates in ekka/plans/. Setup runs
+desk/setup/desk-setup.sh as a command job (no AI); ask sends a platform prompt to the desk's agent.
 
     python3 tools/desk_plans.py <desk> <out-dir> [<agent id>]
 
@@ -51,10 +52,46 @@ def _fill(value, desk, code):
     return value
 
 
+# The setup plan is a command job, not an AI (ekka-ai/.github#816): desk/setup/desk-setup.sh, sent in words.
+SETUP_SCRIPT = os.path.join(ROOT, "desk", "setup", "desk-setup.sh")
+MAX_WORD = 4096   # the desk request's limit on one command word (ekka.job.desk.request v1)
+MAX_WORDS = 64    # and on the words in one command
+
+
+def script_words(path):
+    """A script in words of at most MAX_WORD bytes, cut at line ends, so it can grow past one word."""
+    with open(path, encoding="utf-8") as f:
+        script = f.read()
+    words, cur = [], ""
+    for line in script.splitlines(keepends=True):
+        if len(line.encode()) > MAX_WORD:
+            raise ValueError(f"one line of {os.path.relpath(path, ROOT)} is over {MAX_WORD} bytes")
+        if len((cur + line).encode()) > MAX_WORD:
+            words.append(cur)
+            cur = ""
+        cur += line
+    words.append(cur)
+    return words
+
+
+def setup_command():
+    """bash runs the script's words joined back. The run's repos and run id are the two words before them: plain
+    arguments, never part of the script, so an address cannot become a command."""
+    words = ["/bin/bash", "-c", 'R=$1; I=$2; shift 2; eval "$(printf %s "$@")"', "desk-setup",
+             "@input.repos", "@ekka.run_id", *script_words(SETUP_SCRIPT)]
+    if len(words) > MAX_WORDS:
+        raise ValueError(f"the setup command needs {len(words)} words; a desk request takes at most {MAX_WORDS}")
+    return words
+
+
 def render(plan, desk, agent=None):
     """One plan for one desk, from its template; `agent` sets the owning agent."""
     with open(os.path.join(ROOT, "ekka", "plans", f"{plan}.json")) as f:
         d = _fill(json.load(f), desk, desk_code(desk))
+    for op in d["definition"]["operations"]:
+        for s in op["steps"]:
+            if s.get("inputs", {}).get("command") == "{{setupCommand}}":
+                s["inputs"]["command"] = setup_command()
     if "{{" in json.dumps(d):
         raise ValueError(f"ekka/plans/{plan}.json has a placeholder this tool does not fill")
     if agent:

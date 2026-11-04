@@ -6,12 +6,12 @@
   "definition": {
     "schema_version": "ekka.plan.v2",
     "inputs": {
-      "repos": "The repositories to put on the {{desk}} desk: https addresses, as a JSON list or one per line."
+      "repos": "The repositories to put on the {{desk}} desk: https://github.com or https://bitbucket.org addresses, each optionally ending #<branch>, as a JSON list or one per line."
     },
     "operations": [
       {
         "id": "setup",
-        "display_name": "Clone missing repositories and reuse existing checkouts on the {{desk}} desk",
+        "display_name": "Clone missing repositories and reuse existing checkouts on the {{desk}} desk, with no AI",
         "execution": {
           "preferred": {
             "mode": "async",
@@ -29,14 +29,13 @@
               "requires_user_context": false
             },
             "action_input": {},
-            "prompt": {
-              "source": "platform",
-              "slug": "desk-setup",
-              "version": 4
-            },
             "inputs": {
-              "repos": "@input.repos",
               "run_id": "@ekka.run_id",
+              "limits": {
+                "max_seconds": 1800,
+                "max_retries": 0
+              },
+              "command": "{{setupCommand}}",
               "outputs": [
                 {
                   "kind": "desk_map",

@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import desk_plans  # noqa: E402
 
 PROMPTS = os.path.join(ROOT, "prompts", "platform")
+PROMPT_PLANS = ("ask",)   # the plans that send the desk's agent a prompt; setup is a command job (#816)
 
 
 def read(path):
@@ -37,7 +38,8 @@ class TheMasterBlock(unittest.TestCase):
             self.assertTrue(read(p).startswith(block + "\n"), f"{os.path.basename(p)} does not start with the master block")
 
     def test_the_plans_pin_a_prompt_that_carries_it(self):
-        for plan in desk_plans.PLANS:
+        # The setup plan is a command job and sends no prompt (#816, tests/test_desk_setup.py).
+        for plan in PROMPT_PLANS:
             ref = step(desk_plans.render(plan, "code-desk"))["prompt"]
             self.assertTrue(os.path.exists(os.path.join(PROMPTS, f"{ref['slug']}@{ref['version']}.txt")), ref)
             self.assertGreaterEqual(ref["version"], 2, ref)
@@ -72,7 +74,7 @@ class EachDesksPlans(unittest.TestCase):
             self.assertNotIn("desk", step(d)["inputs"], "a job step names its desk once, as its resource")
 
     def test_bind_every_variable_their_prompt_reads(self):
-        for plan in desk_plans.PLANS:
+        for plan in PROMPT_PLANS:
             s = step(desk_plans.render(plan, "code-desk"))
             text = read(os.path.join(PROMPTS, f"{s['prompt']['slug']}@{s['prompt']['version']}.txt"))
             for var in set(re.findall(r"@\{([a-z_]+)\}", text)):
@@ -206,12 +208,15 @@ class TheAskPlan(unittest.TestCase):
         self.assertIn('BEFORE', prompt)
 
     def test_setup_reuses_existing_checkouts(self):
+        # #816: no AI clones. The setup plan runs desk/setup/desk-setup.sh, which clones only an absent folder and
+        # reuses a checkout as it is; tests/test_desk_setup.py runs it.
         s = step(desk_plans.render('setup', 'code-desk'))
-        self.assertEqual(s['prompt']['version'], 4)
-        prompt = read(os.path.join(PROMPTS, f"{s['prompt']['slug']}@{s['prompt']['version']}.txt"))
-        self.assertIn('Only if the folder is absent, clone', prompt)
-        self.assertIn('reuse its current branch, commit and working', prompt)
-        self.assertNotIn('reset --hard', prompt)
+        self.assertNotIn('prompt', s)
+        script = read(desk_plans.SETUP_SCRIPT)
+        self.assertEqual(''.join(s['inputs']['command'][6:]), script)
+        self.assertNotIn('reset --hard', script)
+        self.assertNotIn('git checkout', script)
+        self.assertNotIn('git switch', script)
 
 
 
@@ -224,7 +229,7 @@ class TheUnattendedCommandRules(unittest.TestCase):
         return read(os.path.join(PROMPTS, f"{slug}@{version}.txt"))
 
     def test_the_plans_pin_the_unattended_versions(self):
-        self.assertEqual(step(desk_plans.render("setup", "code-desk"))["prompt"]["version"], 4)
+        self.assertNotIn("prompt", step(desk_plans.render("setup", "code-desk")))   # a command job since #816
         self.assertEqual(step(desk_plans.render("ask", "code-desk"))["prompt"]["version"], 8)
 
     def test_one_command_per_call_and_no_inline_helper(self):
@@ -256,7 +261,8 @@ class TheUnattendedCommandRules(unittest.TestCase):
         # #143: the Enclave can bind the collected desk map to the run that wrote it, as the ask record already is.
         s = step(desk_plans.render("setup", "code-desk"))
         self.assertEqual(s["inputs"]["run_id"], "@ekka.run_id")
-        self.assertIn('write .ekka/desk-map.json in this shape:\n{"run_id":"@{run_id}",', self.prompt("desk-setup", 4))
+        self.assertEqual(s["inputs"]["command"][5], "@ekka.run_id")   # the script's run id: RUN=${I-}
+        self.assertIn('jq -s --arg run "$RUN"', read(desk_plans.SETUP_SCRIPT))
 
     def test_planted_the_v0_1_2_setup_prompt_is_caught(self):
         with self.assertRaises(AssertionError):
