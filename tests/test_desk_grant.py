@@ -343,7 +343,7 @@ CC = "sha256:" + "7" * 64
 
 
 def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH},claude-code={CC}", provider_fails="",
-             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None, own_profiles=None):
+             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None, own_profiles=None, kc_fails=False):
     import subprocess, tempfile
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "bin"))
@@ -372,7 +372,7 @@ def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH
 set -euo pipefail
 export DESKS_STATE={d}; DESKS_AGENT=desks   # exported, as up.sh:38 does: setup.sh reads it
 say() {{ :; }}; ok() {{ echo "ok: $*"; }}; die() {{ echo "die: $*" >&2; exit 1; }}
-kc() {{ [ "$1 $2" = "admin-client on" ] && printf %s "{SECRET}"; }}
+kc() {{ [ -z "${{KC_FAILS:-}}" ] || {{ echo "urllib.error.HTTPError: HTTP Error 503: Service Unavailable" >&2; return 1; }}; [ "$1 $2" = "admin-client on" ] && printf %s "{SECRET}"; }}
 profile_names() {{ printf '%s\\n' bitbucket claude-code codex github {" ".join(own_profiles or {})}; }}
 ENCLAVE_HOME=$DESKS_STATE/enclave-home
 ekka_in() {{ docker compose exec -T ekka-enclave ekka "$@"; }}   # the test's docker stub reads the ekka words after the marker
@@ -383,7 +383,7 @@ step_desk_grant
     env = dict(os.environ, PATH=f"{d}/bin:{os.environ['PATH']}", CALLS=calls, DESK_ID=IMAGE, POLICY_DIGEST=POLICY_DIGEST,
                NODE="8e1d5a6a-6df2-429a-8c3d-cc75c7682671", AGENT=AGENT, GATE=GATE, GRANTS=grants,
                PROVIDER_DIGESTS=providers, PROVIDER_FAILS=provider_fails, PLAN_FAILS=plan_fails,
-               **({"DIGEST_FAILS": "1"} if digest_fails else {}), **({"DEV_ID": dev_id} if dev_id else {}))
+               **({"DIGEST_FAILS": "1"} if digest_fails else {}), **({"KC_FAILS": "1"} if kc_fails else {}), **({"DEV_ID": dev_id} if dev_id else {}))
     r = subprocess.run(["bash", "-c", script], cwd=ROOT, capture_output=True, text=True, env=env, timeout=60,
                        stdin=subprocess.DEVNULL)
     seen = []
@@ -454,6 +454,16 @@ class UpShStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([(c["kind"], c.get("grant")) for c in calls if c["kind"] in ("add", "revoke")],
                          [("add", None), ("revoke", "g-old")], "add first, revoke after: never without a grant")
+
+    def test_planted_keycloak_not_answering_is_named_and_the_adapter_never_runs(self):
+        # Measured on a server: Keycloak was still starting, the adapter got an empty stdin, and the install blamed
+        # the first provider (SECRET_INVALID against bitbucket). The refusal must name what actually failed.
+        r, calls, _ = run_step(kc_fails=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("the sign-in service (Keycloak) did not give the adapter its secret", r.stderr)
+        self.assertIn("HTTP Error 503", r.stderr)
+        self.assertNotIn("SECRET_INVALID", r.stderr)
+        self.assertEqual([c["kind"] for c in calls if c["kind"] in ("provider", "add", "revoke")], [])
 
     def test_without_the_adapter_nothing_happens(self):
         r, calls, _ = run_step(image=False)
