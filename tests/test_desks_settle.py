@@ -3,7 +3,7 @@
 Docker is replaced by a fake that answers `ps` from a scripted sequence of container states and records every
 call, and the clock advances only when the procedure sleeps. So each case is exact and takes no real time.
 The marker's and the hold's fields are written here from the contract, never read from the code under test, and a
-test holds them to the vendored @ekka-ai/contracts 0.73.0 schemas (vendor/ekka-contracts/backend/settle-*.json).
+test holds them to the vendored @ekka-ai/contracts 0.76.0 schemas (vendor/ekka-contracts/backend/settle-*.json).
 """
 import datetime as dt
 import io
@@ -375,7 +375,7 @@ class Hold(unittest.TestCase):
 
 
 class TheVendoredContract(unittest.TestCase):
-    """The marker and the hold are the published contract's shapes (@ekka-ai/contracts 0.73.0, vendored)."""
+    """The marker and the hold are the published contract's shapes (@ekka-ai/contracts 0.76.0, vendored)."""
 
     VENDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor", "ekka-contracts", "backend")
 

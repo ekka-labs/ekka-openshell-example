@@ -1,11 +1,11 @@
 {
   "package": "@ekka-ai/contracts",
-  "version": "0.73.0",
-  "tag": "v0.73.0",
-  "commit": "e210554e470899ee2b8b0ad2af077e8f3d980f6d",
+  "version": "0.76.0",
+  "tag": "v0.76.0",
+  "commit": "70e88685fb58507e3cbf9c41b9096d260a949150",
   "files": {
     "backend/adapter-config.v1.schema.json": "791b989aaf0028c9005a62de2a2b89f855b6cb403e616d4d8ecb9eaf419b453a",
-    "backend/operations.json": "da34c5a9fe283e6b4a5ad5b2fe0bb8eb13c79a48c3bce8a55e37f9efef68fcf5",
+    "backend/operations.json": "62ce331eedbbb3194d07a33119791594cba4213e3ddb98d23095c35c1084b0bd",
     "backend/samples/adapter-config.json": "3203e9c7fdb63b4a4cc91d78122b0474e928e5c5e15f6dacaad3194c4227ed07",
     "backend/samples/result.duplicate-refused.json": "95ffabc566f5b5730ce52300e37299d4ccd6f3ce7e4940f48a085753adc9f932",
     "backend/samples/result.ready.json": "560f42aa4667f21b83479a3d2f23a658db92e96db7fe38a62b7ad5cfb1ec6950",
@@ -20,7 +20,8 @@
     "backend/samples/settle-marker.json": "ff6620074338539528708fc0a02ac6b26de7b1568cf86846f997072c19e99f41",
     "backend/settle-hold.v1.schema.json": "d40204a2fa44cebf80c42506d61363ac34e5319c9c69a652a390aa5b2e8e8e2c",
     "backend/settle-marker.v1.schema.json": "afb6b55d23d4b109bbaeafadb64161105243027693a0a24470e6cf4aff67abf0",
-    "governance/grant-constraints/desks.v1.schema.json": "e2ba140831e6b2a7ca7027121498cc1a2d72461d070d9e8a34a27f53f5409b48",
+    "governance/grant-constraints/desks.v1.schema.json": "701e9233a1327631fdeebd10234917dc9c27c22bf585481af3b178cb4b991b44",
+    "governance/grant-constraints/samples/desks.v1.discovery.json": "16a3b1d9de9a4c8a449589ef7ee1ab9e0e4981672e6ffe77ec52098ac32b3e45",
     "governance/grant-constraints/samples/desks.v1.json": "f327d5cfbacc55a4ad23199f7ba4e3d772acae76c4a7ab4e63fd26e7f3404848"
   }
 }

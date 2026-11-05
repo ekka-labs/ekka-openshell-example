@@ -3,7 +3,7 @@
 `ekka desk <op>` runs one of them by name: one call through the Enclave's API gate to the backend adapter on
 `apis/desks`, run only by an organization admin, reading `outcome` and `desk_ready` from the adapter's answer.
 The inputs are the one table the CLI sends (ADK-C3). The routes and the answers are the adapter contract's own,
-read from vendor/ekka-contracts (published @ekka-ai/contracts 0.73.0), never restated here.
+read from vendor/ekka-contracts (published @ekka-ai/contracts 0.76.0), never restated here.
 """
 import hashlib
 import json
@@ -66,7 +66,7 @@ def facts_accept(contract, answer):
 class TheVendoredContract(unittest.TestCase):
     def test_is_the_published_files_byte_for_byte(self):
         manifest = vendored("MANIFEST.json")
-        self.assertEqual(manifest["version"], "0.73.0")
+        self.assertEqual(manifest["version"], "0.76.0")
         for path, digest in manifest["files"].items():
             with open(os.path.join(VENDOR, path), "rb") as f:
                 self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest, path)
