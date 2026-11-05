@@ -127,12 +127,15 @@ class TheAdminClient(unittest.TestCase):
         run(["admin-client", "on"], kc)
         self.assertIn("config:write", {s["name"] for s in kc.scopes})
 
-    def test_its_scopes_are_exactly_the_four_the_adapters_calls_need(self):
+    def test_its_scopes_are_exactly_the_five_the_adapters_calls_need(self):
         # Written here from OpenShell 0.1.4's annotations, never read from the code under test (scope review).
+        # config:read since desk backend v0.1.6: GetSandboxConfig (the approval mode read back after it is set),
+        # GetDraftPolicy and GetDraftHistory (a discovery desk's evidence). Without it the read-back was refused
+        # (PermissionDenied, a box, 5 Nov 2026). Still read-only: no wider scope is granted.
         kc = FakeKeycloak()
         run(["admin-client", "on"], kc)
-        self.assertEqual(sorted(kc.defaults), ["config:write", "provider:read", "sandbox:read", "sandbox:write"])
-        for wider in ("provider:write", "config:read", "workspace:read", "openshell:all"):
+        self.assertEqual(sorted(kc.defaults), ["config:read", "config:write", "provider:read", "sandbox:read", "sandbox:write"])
+        for wider in ("provider:write", "workspace:read", "workspace:write", "openshell:all"):
             self.assertNotIn(wider, kc.defaults, f"{wider}: more than the adapter's calls need")
 
     def test_refuses_to_print_its_secret_to_a_terminal(self):

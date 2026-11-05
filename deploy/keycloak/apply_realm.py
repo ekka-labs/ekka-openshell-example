@@ -168,13 +168,17 @@ def create(api, spec):
 # desk administration on, so `apply` never sees it on an install that did not.
 ADMIN_CLIENT = "ekka-desk-admin"
 # ONLY the scopes the adapter's calls need, read from OpenShell 0.1.4's own annotations (regression review):
-# GetSandbox and GetSandboxPolicyStatus sandbox:read; Create, Delete, Stop, Start and DetachSandboxProvider
-# sandbox:write; GetProvider, GetProviderProfile, ListProviderProfiles provider:read; UpdateConfig config:write.
+# GetSandbox, GetSandboxPolicyStatus and GetSandboxLogs sandbox:read; Create, Delete, Stop, Start and
+# DetachSandboxProvider sandbox:write; GetProvider, GetProviderProfile, ListProviderProfiles provider:read;
+# UpdateConfig config:write; GetSandboxConfig, GetDraftPolicy and GetDraftHistory config:read (discovery: the
+# approval mode read back after it is set, and the evidence). Without config:read the adapter set a discovery desk's
+# approval mode and could not read it back (PermissionDenied, a box, 5 Nov 2026).
 # Never provider:write: a stolen adapter credential must not create, delete or rotate a provider.
-ADMIN_SCOPES = ["config:write", "provider:read", "sandbox:read", "sandbox:write"]
+ADMIN_SCOPES = ["config:read", "config:write", "provider:read", "sandbox:read", "sandbox:write"]
 SCOPE_DESCRIPTIONS = {
     "sandbox:write": "Create, stop, start and remove sandboxes, and detach a provider (OpenShell sandbox:write).",
     "config:write": "Change desk configuration and policy (OpenShell config:write).",
+    "config:read": "Read a desk's settings and its proposed policy changes (OpenShell config:read).",
 }
 
 
