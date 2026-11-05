@@ -221,7 +221,7 @@ class TheEnclaveRestartsOnlyWhenItsSettingsChanged(unittest.TestCase):
             'say() { :; }; ok() { echo "ok: $*"; }; die() { echo "die: $*" >&2; exit 1; }',
             'log() { echo "$*" >> "$CALLS"; }',
             "connect_desk_admin() { log connect; }; write_adapter_config() { log config; }; backend_permits_dir() { log permits; }",
-            "sed() { :; }; wait_enclave() { log wait_enclave; }",
+            "sed() { :; }; wait_enclave() { log wait_enclave; }; wait_gateway() { log wait_gateway; }",
             'systemctl() { log "systemctl $*"; }',
             "docker() { echo healthy; }",
             'bash() { log "setup.sh $2"; if [[ $2 == enclave-backend ]]; then '
@@ -231,10 +231,14 @@ class TheEnclaveRestartsOnlyWhenItsSettingsChanged(unittest.TestCase):
         return r, read_lines(calls)
 
     def test_changed_settings_restart_the_enclave_after_the_adapter_is_healthy(self):
+        """Restarting the Enclave stops and starts the desks stack too (ekka-desks is bound to it), so the step waits
+        for the gateway as well: it answers only after the unit's ExecStartPre has Keycloak and the edge healthy. The
+        next step reads Keycloak through the edge; without this wait it got "connection refused" (a box, 5 Nov 2026)."""
         r, calls = self.step("changed")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(calls, ["connect", "config", "permits", "setup.sh enclave-backend", "setup.sh backend-preflight",
-                                 "systemctl restart ekka-desks", "systemctl restart ekka", "wait_enclave"])
+                                 "systemctl restart ekka-desks", "systemctl restart ekka", "wait_enclave",
+                                 "wait_gateway"])
 
     def test_unchanged_settings_restart_nothing_but_the_stack(self):
         r, calls = self.step("kept")

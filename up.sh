@@ -603,7 +603,11 @@ step_desk_admin() {  # desk administration through EKKA: only once up.env runs t
   ok "the backend adapter is running, with its configuration"
   if [[ $enclave_env == changed ]]; then
     systemctl restart ekka || die "the Enclave did not restart onto its new settings; see: journalctl -u ekka"
-    wait_enclave; ok "the Enclave restarted: its gateway interceptor knows the backend adapter and the discovery permits"
+    # Restarting the Enclave stops and starts the desks stack too (ekka-desks is bound to it). The gateway answers only
+    # after the unit's ExecStartPre has Keycloak and the edge healthy, and the next step reads Keycloak through the
+    # edge: without this wait it got "connection refused" (a box, 5 Nov 2026).
+    wait_enclave; wait_gateway
+    ok "the Enclave restarted: its gateway interceptor knows the backend adapter and the discovery permits"
   fi
 }
 
