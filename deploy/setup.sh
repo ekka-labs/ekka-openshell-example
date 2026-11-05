@@ -129,7 +129,7 @@ stage_init() {
   python3 "$ROOT/tools/verify_pins.py" --images >/dev/null || die "a pinned image does not hold the pinned binary"
 
   say "Keycloak, its database and the edge"
-  $P --env-file "$DESKS_STATE/desks.env" up -d keycloak-db keycloak edge >/dev/null
+  start_signin >/dev/null
   kc_env
   for _ in $(seq 1 60); do curl -sf -o /dev/null --cacert "$T/ca.crt" https://127.0.0.1:8443/realms/master && break; sleep 5; done
   # A live install migrates first: people's sign-ins become read-only (ADK-E2), and apply refuses the old scopes.
@@ -235,9 +235,23 @@ stage_enclave_backend() {
   echo changed
 }
 
-wait_keycloak() {  # Keycloak answers its master realm and a token call; started here if it is not up (the stack unit may be masked)
+# start_signin [--wait]: Keycloak, its database and the edge, started from this checkout ONLY when the stack unit is not
+# running. ⛔ NEVER `up` A SERVICE THE RUNNING STACK UNIT OWNS. The unit runs Compose from its installed copy
+# (/usr/local/lib/ekka-desks/deploy) and this script from the checkout; `edge` mounts ./edge/nginx.conf, so its config
+# hash differs, an `up` from here RECREATES it, and the unit's --abort-on-container-exit stops the whole stack, every
+# desk with it. Measured on a box, 5 Nov 2026: an upgrade's enclave-backend step took every desk down for 8 minutes.
+# While the unit is running or starting, its own ExecStartPre brings these up, so there is nothing to start. A unit
+# that is stopped, failed or masked owns nothing, and they are started here as before.
+start_signin() {
+  case $(systemctl is-active ekka-desks.service 2>/dev/null || true) in
+    active|activating|reloading) return 0 ;;
+  esac
+  $P --env-file "$DESKS_STATE/desks.env" up -d "$@" keycloak-db keycloak edge
+}
+
+wait_keycloak() {  # Keycloak answers its master realm and a token call; started here only when the stack unit is not running
   local i
-  $P --env-file "$DESKS_STATE/desks.env" up -d --wait keycloak-db keycloak edge >/dev/null 2>&1 || true   # no gateway: no preflight needed
+  start_signin --wait >/dev/null 2>&1 || true   # no gateway: no preflight needed
   keycloak_answers() {   # a token, not only a page
     curl -sf -o /dev/null --cacert "$T/ca.crt" https://127.0.0.1:8443/realms/master 2>/dev/null \
       && python3 -c 'import sys; sys.path.insert(0, "keycloak"); import apply_realm as a; a.Api()' >/dev/null 2>&1
