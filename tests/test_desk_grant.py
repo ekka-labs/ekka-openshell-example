@@ -1,8 +1,7 @@
 """The desks grant's limits and whether the grant in place holds them .
 
 The limits are checked against the vendored @ekka-ai/contracts governance/grant-constraints/desks.v1 schema itself,
-with one addition stated here until the vendored copy carries it: the optional, closed `discovery` block (contracts
-0.76.0) a discovery window writes.
+including its optional, closed `discovery` block (0.76.0), which a discovery window writes.
 The policy digest below is the REAL `ekka-backend digest policy` over desk/policy.json, measured with an image built
 from the signed ekka-backend v0.1.3 on 2026-10-19; the test of the decision uses Govern's grant rows as
 `ekka gate grant list --json` prints them (verbatim GrantSummary rows).
@@ -34,25 +33,8 @@ GATE = "enclave8e1d5a6aApi"
 NOW = dt.datetime(2026, 10, 16, tzinfo=dt.timezone.utc)
 
 
-# contracts 0.76.0 adds `discovery` to desks.v1; the vendored copy is 0.73.0 and closed, so it refuses the block. Until
-# it moves, the block's shape is stated here, as that release states it, and the rest is the vendored schema's own.
-# TheLimits.test_the_vendored_contract_does_not_yet_hold_discovery fails the day the vendored copy carries it.
-DISCOVERY_SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "required": ["image_digests", "providers", "name_prefix", "expires_at"],
-    "properties": {
-        "image_digests": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": True, "items": {"$ref": "#/$defs/digest"}},
-        "providers": {"type": "array", "maxItems": 8, "uniqueItems": True, "items": {"$ref": "#/$defs/name"}},
-        "name_prefix": {"const": "discover-"},
-        "expires_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
-    },
-}
-SCHEMA_WITH_DISCOVERY = copy.deepcopy(SCHEMA)
-SCHEMA_WITH_DISCOVERY["properties"]["discovery"] = DISCOVERY_SCHEMA
-
-
 def errors(value):
-    return schema_check.schema_errors(value, SCHEMA_WITH_DISCOVERY)
+    return schema_check.schema_errors(value, SCHEMA)
 
 
 def build(**over):
@@ -120,10 +102,17 @@ class TheLimits(unittest.TestCase):
             with self.assertRaises(dg.Refused, msg=str(over)):
                 build(**over)
 
-    def test_the_vendored_contract_does_not_yet_hold_discovery(self):
-        # When this fails, the vendored contracts carry `discovery`: drop DISCOVERY_SCHEMA and check against SCHEMA.
-        self.assertNotIn("discovery", SCHEMA["properties"])
-        self.assertEqual(schema_check.schema_errors({**build(), "discovery": {}}, SCHEMA), ["/discovery: not allowed"])
+    def test_the_vendored_contract_holds_the_discovery_block_and_keeps_it_closed(self):
+        with open(os.path.join(ROOT, "vendor", "ekka-contracts", "governance", "grant-constraints", "samples",
+                               "desks.v1.discovery.json")) as f:
+            sample = json.load(f)
+        self.assertEqual(errors(sample), [], "the published sample with a window")
+        block = dg.window("ghcr.io/example/project@sha256:" + "a" * 64, ["github"], 60, NOW)["discovery"]
+        self.assertEqual(errors({**build(), "discovery": block}), [], "the block this installer writes")
+        self.assertEqual(errors({**sample, "discovery": {**block, "allowed_cidrs": ["0.0.0.0/0"]}}),
+                         ["/discovery/allowed_cidrs: not allowed"], "an unknown key inside the block is refused")
+        self.assertNotEqual(errors({**sample, "discovery": {**block, "name_prefix": "prod-"}}), [])
+        self.assertNotEqual(errors({**sample, "discovery": {k: v for k, v in block.items() if k != "expires_at"}}), [])
 
     def test_the_shipped_limits_open_no_address_range_and_no_port_but_443(self):
         net = build()["policy_baseline"]["network"]

@@ -2,7 +2,7 @@
 
     <the Enclave's EKKA_TENANT_ID, EKKA_NODE_ID and EKKA_GOVERN_URL lines> | python3 tools/adapter_config.py write <path> <public name>
 
-The shape is @ekka-ai/contracts 0.73.0 backend/adapter-config.v1.schema.json (vendored). Every value comes from the machine:
+The shape is @ekka-ai/contracts 0.76.0 backend/adapter-config.v1.schema.json (vendored). Every value comes from the machine:
 
   organization_id     the Enclave's EKKA_TENANT_ID
   api_gate_instance   enclave<first 8 hex of EKKA_NODE_ID>Api, as the runner names this Enclave's API gate
