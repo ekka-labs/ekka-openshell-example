@@ -116,20 +116,22 @@ Read the file before running this command; `--yes` confirms the change without a
 ### Onboarding a project: the discovery window
 
 The desks grant allows one image and one policy. To learn what a new project's build needs, the server's administrator
-opens the grant for ONE disposable desk, created from the project's own image with `desk/policy-discovery.json`: every
-address on ports 443 and 80, enforcement on, so OpenShell's log records each connection (binary, host, port). The log
-becomes the project's closed policy; the window then ends. The desk gets no production credential.
+opens a window for ONE disposable desk, created from the project's own image with the shipped policy. While the window
+is open, the backend adapter may switch that desk, and only that desk, to NVIDIA OpenShell's auto approval mode: the
+build's network requests are approved as they arrive, except those OpenShell holds as risky, and every one is recorded.
+The adapter turns auto mode on only after it reads the setting back as applied, and only then writes a permit for that
+desk; the Enclave's gateway interceptor lets the desk's proposals through only while that permit is valid. The records
+become the project's recommended policy, which a person reviews before any desk uses it. No policy file, address range
+or port is added for the window.
 
 | Command | What it does |
 |---|---|
 | `<token> \| sudo ekka desk registry login <host> <user>` | A registry's read-only credential, kept root-only on the server for image pulls. For GitHub Packages the token must be classic with the scope `read:packages` only, and that is checked before it is kept. |
 | `sudo ekka desk registry show`, `sudo ekka desk registry logout <host>` | The registries with a kept credential; forget one. |
 | `sudo ekka desk image pull <registry>/<name>@sha256:<64 hex> [--signed-by <identity> --issuer <url>]` | The project image onto this machine, by digest, through a throwaway Docker login that is deleted after; with `--signed-by`, cosign checks the signature first. |
-| `sudo ekka desk grant packs` | The network packs this server has: the shipped ones (`desk/packs/`) and its own (`packs.local`), each with what it opens. |
-| `sudo ekka desk grant discovery --image <registry>/<name>@sha256:<64 hex> --packs <pack>,<pack>` | Opens the window from packs: they are combined with the shipped policy, checked against OpenShell's clash rules, and the grant is widened to exactly their hosts. |
-| `sudo ekka desk grant show` | The limits in force: images, policies, ports, address ranges, and whether a window is open. |
-| `sudo ekka desk grant discovery --image <registry>/<name>@sha256:<64 hex> --policy <file>` | Opens the window: adds that image and policy to the grant, plus the ranges and ports the policy names. Prints the `ekka desk create` line to use. |
-| `sudo ekka desk grant restore` | Ends the window: the shipped limits are written back. A desk made under the window keeps running until it is deleted; make no new one. |
+| `sudo ekka desk grant discovery --image <registry>/<name>@sha256:<64 hex> --providers <provider>,<provider> [--minutes 60]` | Opens the window: adds that image to the grant and writes the grant's `discovery` block (that image, those providers, desks named `discover-*`, the time it closes). Open for 60 minutes unless `--minutes` says otherwise, at most 240. Each provider must already be connected. |
+| `sudo ekka desk grant show` | The limits in force: images, policies, ports, address ranges, and whether a window is open, for which image and providers, and until when. |
+| `sudo ekka desk grant restore` | Ends the window: the discovery block and the window's image leave the grant, and the shipped limits are written back. Run it when the discovery desk is deleted, or after the window has closed by itself. |
 
 ## Who may use the desks
 

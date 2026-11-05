@@ -123,34 +123,72 @@ class TheEkkaVerbEnds(unittest.TestCase):
 
 
 class TheGrantVerb(unittest.TestCase):
-    """`sudo ekka desk grant show|discovery|restore` (ekka-ai/.github#784), run as the real up.sh verb with `id` stubbed
-    and a state folder holding the limits the tool writes. `discovery` is driven only to its refusals here: the digest
-    step needs the adapter image."""
+    """`sudo ekka desk grant show|discovery|restore`, run as the real up.sh verb with `id` stubbed and a state folder
+    holding the limits the tool writes. `discovery` is driven to its refusals and to the grant step, which fails here
+    (it needs the adapter image): a window whose grant was not written must not be left open."""
+
+    REF = "ghcr.io/example/project@sha256:" + "a" * 64
 
     def run_verb(self, d, *args):
         env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], DESKS_STATE=str(Path(d, "state")))
-        return subprocess.run(["bash", str(ROOT/"up.sh"), "grant", *args], capture_output=True, text=True, env=env, timeout=60, cwd=ROOT)
+        return subprocess.run(["bash", str(ROOT/"up.sh"), "grant", *args], capture_output=True, text=True, env=env, timeout=60,
+                              cwd=ROOT, stdin=subprocess.DEVNULL)
+
+    def box(self, d, *provider_args):
+        Path(d, "id").write_text("#!/bin/bash\necho 0\n"); os.chmod(Path(d, "id"), 0o755)
+        state = Path(d, "state"); (state/"backend").mkdir(parents=True)
+        (state/"up.env").write_text("DESKS_NAME=desks.example.test\nEKKA_BACKEND_IMAGE=ghcr.io/example/backend@sha256:" + "f" * 64 + "\n")
+        lim = subprocess.run([sys.executable, str(ROOT/"tools"/"desk_grant.py"), "limits", "--image-id", "sha256:" + "d" * 64,
+                              "--policy-digest", "sha256:" + "e" * 64, *provider_args], capture_output=True, text=True,
+                             check=True, cwd=ROOT).stdout
+        (state/"backend"/"desks-grant.json").write_text(lim)
+        return state
 
     def test_show_restore_and_the_refusals(self):
         with tempfile.TemporaryDirectory() as d:
-            Path(d, "id").write_text("#!/bin/bash\necho 0\n"); os.chmod(Path(d, "id"), 0o755)
-            state = Path(d, "state"); (state/"backend").mkdir(parents=True)
-            (state/"up.env").write_text("DESKS_NAME=desks.example.test\nEKKA_BACKEND_IMAGE=ghcr.io/example/backend@sha256:" + "f" * 64 + "\n")
-            lim = subprocess.run([sys.executable, str(ROOT/"tools"/"desk_grant.py"), "limits", "--image-id", "sha256:" + "d" * 64,
-                                  "--policy-digest", "sha256:" + "e" * 64], capture_output=True, text=True, check=True, cwd=ROOT).stdout
-            (state/"backend"/"desks-grant.json").write_text(lim)
+            state = self.box(d, "--provider", "github=sha256:" + "c" * 64)
             r = self.run_verb(d, "show"); self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("no discovery window: the shipped limits", r.stdout)
             self.assertIn(", on port 443\n  address ranges: none", r.stdout)
             self.assertIn("PROVIDERS (the keys a desk may use)", r.stdout)
             r = self.run_verb(d, "restore"); self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("no discovery window is open", r.stdout)
-            r = self.run_verb(d, "discovery", "--image", "ghcr.io/x/y:latest", "--policy", str(ROOT/"desk"/"policy-discovery.json"))
-            self.assertEqual(r.returncode, 1); self.assertIn("a tag can move; a digest cannot", r.stderr)
-            r = self.run_verb(d, "discovery", "--image", "ghcr.io/x/y@sha256:" + "a" * 64, "--policy", "/nonexistent.json")
-            self.assertEqual(r.returncode, 1); self.assertIn("--policy must name a policy file", r.stderr)
+            for args, why in (
+                    (("--image", "ghcr.io/x/y:latest", "--providers", "github"), "a tag can move; a digest cannot"),
+                    (("--image", self.REF), "--providers must name the providers"),
+                    (("--image", self.REF, "--providers", "github", "--minutes", "241"), "--minutes is a whole number from 1 to 240"),
+                    (("--image", self.REF, "--providers", "github", "--minutes", "0"), "--minutes is a whole number from 1 to 240"),
+                    (("--image", self.REF, "--providers", "Git Hub"), "is not a provider name"),
+                    (("--image", self.REF, "--providers", "github,bitbucket"), "bitbucket is not connected on this server"),
+                    (("--image", self.REF, "--policy", "/p.json"), "usage: sudo ekka desk grant discovery --image"),
+                    (("--image", self.REF, "--packs", "github"), "usage: sudo ekka desk grant discovery --image")):
+                r = self.run_verb(d, "discovery", *args)
+                self.assertEqual(r.returncode, 1, args); self.assertIn(why, r.stderr, args)
+                self.assertFalse((state/"backend"/"desks-grant.extras.json").exists(), args)
+                self.assertFalse((state/"backend"/"desks-grant.extras.json.new").exists(), args)
+            r = self.run_verb(d, "packs"); self.assertEqual(r.returncode, 1); self.assertIn("usage: sudo ekka desk grant show", r.stderr)
             r = self.run_verb(d, "nonsense"); self.assertEqual(r.returncode, 1); self.assertIn("usage: sudo ekka desk grant", r.stderr)
-            self.assertFalse((state/"backend"/"desks-grant.extras.json").exists(), "no refusal left a window behind")
+
+    def test_a_window_whose_grant_was_not_written_is_not_left_open(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = self.box(d, "--provider", "github=sha256:" + "c" * 64)
+            Path(d, "docker").write_text("#!/bin/bash\nexit 1\n"); os.chmod(Path(d, "docker"), 0o755)   # no desk image here
+            r = self.run_verb(d, "discovery", "--image", self.REF, "--providers", "github")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("the window is not open", r.stderr)
+            self.assertFalse((state/"backend"/"desks-grant.extras.json").exists())
+
+    def test_restore_ends_a_window_the_grant_holds_even_without_its_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = self.box(d)
+            lim = json.loads((state/"backend"/"desks-grant.json").read_text())
+            lim["discovery"] = {"image_digests": ["sha256:" + "a" * 64], "providers": [], "name_prefix": "discover-",
+                                "expires_at": "2026-10-16T01:00:00Z"}
+            (state/"backend"/"desks-grant.json").write_text(json.dumps(lim))
+            Path(d, "docker").write_text("#!/bin/bash\nexit 1\n"); os.chmod(Path(d, "docker"), 0o755)
+            r = self.run_verb(d, "restore")
+            self.assertNotIn("no discovery window is open", r.stdout)
+            self.assertIn("the shipped limits could not be written back", r.stderr, "it tried: the grant step ran")
 
 
 class TheRegistryAndImageVerbs(unittest.TestCase):

@@ -16,8 +16,9 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import backend_preflight as bp  # noqa: E402
 
 
-def state(profile="desk-admin", config="file", ca="file"):
-    """A state folder: up.env with `profile`, and each file as `file`, `dir`, `link` or None (missing)."""
+def state(profile="desk-admin", config="file", ca="file", permits="dir"):
+    """A state folder: up.env with `profile`, and each file (and the permits folder) as `file`, `dir`, `link` or
+    None (missing)."""
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "backend"))
     os.makedirs(os.path.join(d, "tls"))
@@ -28,7 +29,8 @@ def state(profile="desk-admin", config="file", ca="file"):
     real = os.path.join(d, "elsewhere")
     with open(real, "w") as f:
         f.write("{}")
-    for rel, kind in (("backend/config.json", config), ("tls/ca.crt", ca)):
+    os.makedirs(os.path.join(d, "elsewhere-dir"))
+    for rel, kind in (("backend/config.json", config), ("tls/ca.crt", ca), ("backend/permits", permits)):
         path = os.path.join(d, rel)
         if kind == "file":
             with open(path, "w") as f:
@@ -36,13 +38,21 @@ def state(profile="desk-admin", config="file", ca="file"):
         elif kind == "dir":
             os.makedirs(path)
         elif kind == "link":
-            os.symlink(real, path)
+            os.symlink(os.path.join(d, "elsewhere-dir") if rel == "backend/permits" else real, path)
     return d
 
 
 class TheCheck(unittest.TestCase):
     def test_real_files_pass(self):
         self.assertEqual(bp.main([state()]), 0)
+
+    def test_planted_a_missing_linked_or_file_permits_folder_is_refused(self):
+        for kind, why in ((None, "does not exist"), ("link", "is a link, not the folder itself"), ("file", "is not a folder")):
+            d = state(permits=kind)
+            self.assertEqual(bp.main([d]), 1, kind)
+            (reason,) = bp.reasons(d)
+            self.assertTrue(reason.startswith(f"{os.path.join(d, 'backend', 'permits')} {why}"), reason)
+            self.assertIn("the discovery permits folder", reason)
 
     def test_planted_a_missing_configuration_is_refused(self):
         self.assertEqual(bp.main([state(config=None)]), 1)

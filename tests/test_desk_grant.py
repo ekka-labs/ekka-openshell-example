@@ -1,6 +1,8 @@
 """The desks grant's limits and whether the grant in place holds them .
 
-The limits are checked against the vendored @ekka-ai/contracts governance/grant-constraints/desks.v1 schema itself.
+The limits are checked against the vendored @ekka-ai/contracts governance/grant-constraints/desks.v1 schema itself,
+with one addition stated here until the vendored copy carries it: the optional, closed `discovery` block (contracts
+0.76.0) a discovery window writes.
 The policy digest below is the REAL `ekka-backend digest policy` over desk/policy.json, measured with an image built
 from the signed ekka-backend v0.1.3 on 2026-10-19; the test of the decision uses Govern's grant rows as
 `ekka gate grant list --json` prints them (verbatim GrantSummary rows).
@@ -32,8 +34,25 @@ GATE = "enclave8e1d5a6aApi"
 NOW = dt.datetime(2026, 10, 16, tzinfo=dt.timezone.utc)
 
 
+# contracts 0.76.0 adds `discovery` to desks.v1; the vendored copy is 0.73.0 and closed, so it refuses the block. Until
+# it moves, the block's shape is stated here, as that release states it, and the rest is the vendored schema's own.
+# TheLimits.test_the_vendored_contract_does_not_yet_hold_discovery fails the day the vendored copy carries it.
+DISCOVERY_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["image_digests", "providers", "name_prefix", "expires_at"],
+    "properties": {
+        "image_digests": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": True, "items": {"$ref": "#/$defs/digest"}},
+        "providers": {"type": "array", "maxItems": 8, "uniqueItems": True, "items": {"$ref": "#/$defs/name"}},
+        "name_prefix": {"const": "discover-"},
+        "expires_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    },
+}
+SCHEMA_WITH_DISCOVERY = copy.deepcopy(SCHEMA)
+SCHEMA_WITH_DISCOVERY["properties"]["discovery"] = DISCOVERY_SCHEMA
+
+
 def errors(value):
-    return schema_check.schema_errors(value, SCHEMA)
+    return schema_check.schema_errors(value, SCHEMA_WITH_DISCOVERY)
 
 
 def build(**over):
@@ -101,83 +120,130 @@ class TheLimits(unittest.TestCase):
             with self.assertRaises(dg.Refused, msg=str(over)):
                 build(**over)
 
-    def test_a_discovery_window_widens_exactly_what_it_names_and_the_contract_still_accepts_it(self):
-        """ekka-ai/.github#784: a second image (the project's, by registry digest), a second policy (host-less over
-        0.0.0.0/0), the range and port 80 beside 443. Everything else stays the shipped limits."""
-        proj = "sha256:" + "a" * 64; disc = "sha256:" + "b" * 64
-        lim = build(image_ids=[IMAGE, proj], policy_digests=[POLICY_DIGEST, disc], cidrs=["0.0.0.0/0"], ports=[443, 80])
-        self.assertEqual(errors(lim), [])
-        self.assertEqual(lim["image_digests"], sorted([IMAGE, proj]))
-        self.assertEqual(lim["policy_digests"], sorted([POLICY_DIGEST, disc]))
-        net = lim["policy_baseline"]["network"]
-        self.assertEqual((net["allowed_cidrs"], net["allowed_ports"], net["allowed_hosts"]), (["0.0.0.0/0"], [80, 443], ["github.com"]))
-        self.assertEqual(build()["policy_baseline"]["network"]["allowed_cidrs"], [], "the shipped limits are unchanged")
+    def test_the_vendored_contract_does_not_yet_hold_discovery(self):
+        # When this fails, the vendored contracts carry `discovery`: drop DISCOVERY_SCHEMA and check against SCHEMA.
+        self.assertNotIn("discovery", SCHEMA["properties"])
+        self.assertEqual(schema_check.schema_errors({**build(), "discovery": {}}, SCHEMA), ["/discovery: not allowed"])
 
-    def test_planted_a_bad_range_or_port_is_refused(self):
-        for over in ({"cidrs": ["0.0.0.0"]}, {"cidrs": ["256.0.0.0/8"]}, {"cidrs": ["::/0"]}, {"ports": []}, {"ports": [0]},
-                     {"ports": [443, 443]}, {"ports": [70000]}):
-            with self.assertRaises(dg.Refused, msg=str(over)):
-                build(**over)
-
-    def test_the_command_line_takes_the_window_options(self):
-        out = io.StringIO()
-        import contextlib
-        with contextlib.redirect_stdout(out):
-            rc = dg.main(["limits", "--image-id", IMAGE, "--image-id", "sha256:" + "a" * 64, "--policy-digest", POLICY_DIGEST,
-                          "--policy-digest", "sha256:" + "b" * 64, "--allowed-cidr", "0.0.0.0/0", "--allowed-port", "80",
-                          "--provider", "github=" + GITHUB])
-        self.assertEqual(rc, 0)
-        lim = json.loads(out.getvalue())
-        self.assertEqual(lim["policy_baseline"]["network"]["allowed_cidrs"], ["0.0.0.0/0"])
-        self.assertEqual(lim["policy_baseline"]["network"]["allowed_ports"], [80, 443])
-        self.assertEqual(len(lim["policy_digests"]), 2)
-        self.assertEqual(errors(lim), [])
+    def test_the_shipped_limits_open_no_address_range_and_no_port_but_443(self):
+        net = build()["policy_baseline"]["network"]
+        self.assertEqual((net["allowed_cidrs"], net["allowed_ports"]), ([], [443]))
+        self.assertNotIn("discovery", build(), "no window: no desk may enter auto approval mode")
 
 
 class TheDiscoveryWindow(unittest.TestCase):
-    """ekka-ai/.github#784: the window's extras come from the discovery policy itself, and `show` says a window is open."""
+    """`sudo ekka desk grant discovery --image <ref> --providers <a,b> [--minutes N]`: the project's image and the
+    grant's `discovery` block, for NVIDIA OpenShell's auto approval mode on one discovery desk. No policy, address
+    range or port is added: the desk runs the shipped policy, and the backend adapter's permit gates the rest."""
     PROJ = "sha256:" + "a" * 64
-    DISC = "sha256:" + "b" * 64
+    REF = "ghcr.io/example/project@sha256:" + "a" * 64
 
-    def test_the_shipped_discovery_policy_is_the_baseline_with_an_open_network(self):
-        with open(os.path.join(ROOT, "desk", "policy-discovery.json")) as f:
-            disc = json.load(f)
-        self.assertEqual({k: v for k, v in disc.items() if k != "networkPolicies"},
-                         {k: v for k, v in POLICY.items() if k != "networkPolicies"}, "filesystem, landlock and process are the shipped ones")
-        rule = disc["networkPolicies"]["discovery"]
-        (ep,) = rule["endpoints"]
-        # NVIDIA OpenShell (v0.1.4, measured 2026-10-31): `0.0.0.0/0` is refused as one range (it holds loopback,
-        # link-local and the zero address), and a host-less rule may not say `protocol: tcp`. So: no host, no protocol,
-        # TLS relayed and never opened, the public internet as ranges.
-        self.assertNotIn("host", ep); self.assertNotIn("protocol", ep)
-        self.assertEqual((ep["ports"], ep["tls"], ep["enforcement"]), ([443, 80], "NETWORK_TLS_MODE_SKIP", "NETWORK_ENFORCEMENT_MODE_ENFORCE"))
-        self.assertNotIn("binaries", rule, "any program in the desk, which is the point of discovery")
+    def open_window(self, providers=("github", "bitbucket"), minutes=60, granted=None):
+        return dg.window(self.REF, list(providers), minutes, NOW, granted)
 
-    def test_the_ranges_are_the_public_internet_and_nothing_openshell_refuses(self):
-        import ipaddress
-        with open(os.path.join(ROOT, "desk", "policy-discovery.json")) as f:
-            ranges = [ipaddress.ip_network(r) for r in json.load(f)["networkPolicies"]["discovery"]["endpoints"][0]["allowedIps"]]
-        self.assertEqual(len(ranges), 51)
-        never = [ipaddress.ip_network(n) for n in ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
-                                                   "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/3")]
-        for r in ranges:
-            self.assertFalse(any(r.overlaps(n) for n in never), f"{r} reaches a private, loopback, link-local or multicast address")
-        covered = sum(r.num_addresses for r in ranges) + sum(n.num_addresses for n in never)
-        self.assertEqual(covered, 2 ** 32, "every other IPv4 address is in the list: nothing public is refused")
+    def cli(self, *argv, now=NOW):
+        import contextlib
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                rc = dg.main(list(argv), now=now)
+            except SystemExit as e:   # argparse refusing a value
+                rc = e.code
+        return rc, out.getvalue(), err.getvalue()
 
-    def test_the_window_reads_the_range_and_ports_from_the_policy(self):
-        with open(os.path.join(ROOT, "desk", "policy-discovery.json")) as f:
-            disc = json.load(f)
-        w = dg.window(disc, self.PROJ, self.DISC, "ghcr.io/x/y@" + self.PROJ, "/state/discovery-policy.json", "why", "2026-10-31T16:00:00Z")
-        self.assertEqual((w["images"], w["policy_digests"], len(w["cidrs"]), w["ports"]), ([self.PROJ], [self.DISC], 51, [80, 443]))
-        args = dg.extras_args(w)
-        self.assertEqual(args[:4], ["--image-id", self.PROJ, "--policy-digest", self.DISC])
-        self.assertEqual(args.count("--allowed-cidr"), 51)
-        self.assertEqual(args[-2:], ["--allowed-port", "80"])
-        lim = build(image_ids=[IMAGE, *w["images"]], policy_digests=[POLICY_DIGEST, *w["policy_digests"]], cidrs=w["cidrs"], ports=w["ports"])
-        self.assertEqual(errors(lim), [], "the widened limits are still what the contract accepts")
-        self.assertIn("DISCOVERY WINDOW open since 2026-10-31T16:00:00Z", dg.show(lim, w))
-        self.assertIn("no discovery window", dg.show(build()))
+    def test_the_window_writes_the_discovery_block_and_the_contract_accepts_it(self):
+        w = self.open_window()
+        self.assertEqual(w["discovery"], {"image_digests": [self.PROJ], "providers": ["bitbucket", "github"],
+                                          "name_prefix": "discover-", "expires_at": "2026-10-16T01:00:00Z"})
+        self.assertEqual((w["image_ref"], w["since"]), (self.REF, "2026-10-16T00:00:00Z"))
+        lim = build(discovery=dg.window_block(w))
+        self.assertEqual(errors(lim), [])
+        self.assertEqual(lim["discovery"], w["discovery"])
+        self.assertEqual(lim["image_digests"], sorted([IMAGE, self.PROJ]), "the window's image is granted, as before")
+        shipped = build()
+        self.assertEqual({k: v for k, v in lim.items() if k not in ("discovery", "image_digests")},
+                         {k: v for k, v in shipped.items() if k != "image_digests"},
+                         "no policy, address range, port or host: everything else is the shipped limits")
+
+    def test_the_window_lasts_60_minutes_unless_told_and_240_at_most(self):
+        for args, until in (((), "2026-10-16T01:00:00Z"), (("--minutes", "15"), "2026-10-16T00:15:00Z"),
+                            (("--minutes", "240"), "2026-10-16T04:00:00Z")):
+            rc, out, err = self.cli("window", "--image-ref", self.REF, "--providers", "github", *args)
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(json.loads(out)["discovery"]["expires_at"], until, args)
+        for bad in ("241", "0", "-5", "1000"):
+            rc, out, err = self.cli("window", "--image-ref", self.REF, "--providers", "github", "--minutes", bad)
+            self.assertEqual((rc, out), (1, ""), bad)
+            self.assertIn("--minutes is a whole number from 1 to 240", err)
+        rc, out, _ = self.cli("window", "--image-ref", self.REF, "--providers", "github", "--minutes", "sixty")
+        self.assertEqual((rc, out), (2, ""), "not a number: refused before anything is written")
+
+    def test_planted_a_bad_image_reference_is_refused(self):
+        for ref in ("ghcr.io/example/project:latest", "ghcr.io/example/project@sha256:" + "a" * 63,
+                    "ghcr.io/example/project@sha256:" + "A" * 64, "project@sha256:" + "a" * 64,
+                    "ghcr.io/example/project@sha512:" + "a" * 64, "", "ghcr.io/Example/project@sha256:" + "a" * 64):
+            with self.assertRaisesRegex(dg.Refused, "a tag can move; a digest cannot", msg=ref):
+                dg.window(ref, ["github"], 60, NOW)
+
+    def test_planted_a_bad_provider_list_is_refused(self):
+        for providers in ([], ["../github"], ["GitHub"], ["git hub"], [""], ["github", "github"],
+                          [f"p{i}" for i in range(9)]):
+            with self.assertRaises(dg.Refused, msg=str(providers)):
+                self.open_window(providers=providers)
+        with self.assertRaisesRegex(dg.Refused, "bitbucket is not connected on this server"):
+            self.open_window(providers=["github", "bitbucket"], granted=["github"])
+        self.assertEqual(self.open_window(providers=["github"], granted=["github", "bitbucket"])["discovery"]["providers"], ["github"])
+
+    def test_the_command_line_holds_the_providers_to_the_grant_in_force(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "limits.json")
+            with open(path, "w") as f:
+                json.dump(build(), f)   # github only
+            rc, out, err = self.cli("window", "--image-ref", self.REF, "--providers", "github,bitbucket", "--limits", path)
+            self.assertEqual((rc, out), (1, ""))
+            self.assertIn("bitbucket is not connected", err)
+            rc, out, err = self.cli("window", "--image-ref", self.REF, "--providers", " github ", "--limits", path)
+            self.assertEqual(rc, 0, err)
+            win = os.path.join(d, "window.json")
+            with open(win, "w") as f:
+                f.write(out)
+            rc, out, err = self.cli("limits", "--image-id", IMAGE, "--policy-digest", POLICY_DIGEST,
+                                    "--provider", "github=" + GITHUB, "--window", win)
+            self.assertEqual(rc, 0, err)
+            lim = json.loads(out)
+            self.assertEqual(lim["discovery"]["providers"], ["github"])
+            self.assertEqual(errors(lim), [])
+
+    def test_planted_a_discovery_block_off_its_contract_never_reaches_a_grant(self):
+        good = self.open_window()["discovery"]
+        for bad in ({**good, "name_prefix": "prod-"}, {**good, "allowed_cidrs": ["0.0.0.0/0"]},
+                    {k: v for k, v in good.items() if k != "expires_at"},
+                    {**good, "image_digests": []}, {**good, "image_digests": ["sha256:" + c * 64 for c in "abcde"]},
+                    {**good, "image_digests": ["sha256:short"]}, {**good, "providers": ["../x"]},
+                    {**good, "expires_at": "2026-10-16T01:00:00+00:00"}, {**good, "expires_at": "2026-13-45T01:00:00Z"}):
+            with self.assertRaises(dg.Refused, msg=str(bad)):
+                build(discovery=bad)
+
+    def test_planted_a_policy_window_from_an_older_installer_is_refused_by_name(self):
+        old = {"images": [self.PROJ], "policy_digests": ["sha256:" + "b" * 64], "cidrs": ["1.0.0.0/8"], "ports": [80, 443],
+               "image_ref": self.REF, "policy_file": "/state/discovery-policy.json", "since": "2026-10-31T16:00:00Z"}
+        with self.assertRaisesRegex(dg.Refused, "older installer .* sudo ekka desk grant restore"):
+            dg.window_block(old)
+
+    def test_show_says_the_window_is_open_for_which_image_and_providers_until_when(self):
+        w = self.open_window()
+        lim = build(discovery=dg.window_block(w))
+        t = dg.show(lim, w, now=NOW + dt.timedelta(minutes=30))
+        self.assertIn("the discovery image " + self.REF + "\n      " + self.PROJ, t)
+        self.assertIn("ekka-desk:local, built by the install\n      " + IMAGE, t)
+        self.assertIn("DISCOVERY WINDOW open until 2026-10-16T01:00:00Z (opened 2026-10-16T00:00:00Z): image " + self.REF
+                      + ", providers bitbucket, github; a desk named discover-* made from that image with only those"
+                      " providers may use NVIDIA OpenShell's auto approval mode. End it: sudo ekka desk grant restore", t)
+        late = dg.show(lim, w, now=NOW + dt.timedelta(minutes=60))
+        self.assertIn("DISCOVERY WINDOW closed at 2026-10-16T01:00:00Z (expired): no desk may enter auto approval mode.", late)
+        self.assertNotIn("open until", late)
+        self.assertIn("no discovery window: the shipped limits are in force", dg.show(build(), None, now=NOW))
 
     def test_show_names_the_image_the_policy_and_the_providers_in_words(self):
         # A client box, 3 Nov 2026: "providers: none   host ceiling: ..." on one line, and two bare digests. Nobody could
@@ -191,19 +257,18 @@ class TheDiscoveryWindow(unittest.TestCase):
         self.assertIn("<the key> | sudo ekka desk connect <provider>", t)
         t = dg.show(build(), None, ["claude-code", "github"])
         self.assertIn("connected: github\n  on this server, not connected: claude-code\n", t)
-        # A discovery window's own image and policy are named from its record, never as the shipped ones.
-        w = {"images": ["sha256:" + "a" * 64], "policy_digests": ["sha256:" + "b" * 64], "image_ref": "ghcr.io/x/y@sha256:" + "a" * 64,
-             "policy_file": "/state/discovery-policy.json", "reason": "why", "since": "2026-11-03T21:00:00Z"}
-        t = dg.show(build(image_ids=[IMAGE, *w["images"]], policy_digests=[POLICY_DIGEST, *w["policy_digests"]]), w)
-        self.assertIn("the discovery image ghcr.io/x/y@sha256:" + "a" * 64 + "\n      sha256:" + "a" * 64, t)
-        self.assertIn("the discovery policy /state/discovery-policy.json\n      sha256:" + "b" * 64, t)
-        self.assertIn("ekka-desk:local, built by the install\n      " + IMAGE, t)
 
-    def test_planted_a_policy_that_opens_nothing_is_refused(self):
-        with self.assertRaisesRegex(dg.Refused, "nothing to open"):
-            dg.window(POLICY | {"networkPolicies": {}}, self.PROJ, self.DISC, "r", "f", "why", "t")
-        with self.assertRaises(dg.Refused):
-            dg.window({"networkPolicies": {"x": {"endpoints": [{"allowedIps": ["0.0.0.0/0"], "ports": [443]}]}}}, "sha256:short", self.DISC, "r", "f", "why", "t")
+    def test_the_wide_open_discovery_policy_and_the_packs_are_gone(self):
+        # NVIDIA OpenShell's gateway, as this installer ships it, refuses the host-less policy over the public internet
+        # (FAILED_PRECONDITION, measured with any image), so nothing may point a person at it again.
+        for gone in ("desk/policy-discovery.json", "desk/packs"):
+            self.assertFalse(os.path.exists(os.path.join(ROOT, gone)), gone)
+        import subprocess
+        hits = subprocess.run(["git", "grep", "-n", "-I", "-e", "policy-discovery", "-e", "--packs", "-e", "grant packs",
+                               "-e", "discovery-policy.json", "--", ".", ":!tests"],   # tests plant the old words as refusals
+                              cwd=ROOT, capture_output=True, text=True).stdout
+        self.assertEqual([h for h in hits.splitlines() if "discovery-policy.json\"" not in h and "discovery-composed" not in h],
+                         [], "only restore's clean-up of an older window may name the old files")
 
 
 class TheDecision(unittest.TestCase):
@@ -343,7 +408,8 @@ CC = "sha256:" + "7" * 64
 
 
 def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH},claude-code={CC}", provider_fails="",
-             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None, own_profiles=None, kc_fails=False):
+             adapter_files=True, plan_fails="", up=None, dev_id="", pre_limits=None, own_profiles=None, kc_fails=False,
+             window=None):
     import subprocess, tempfile
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "bin"))
@@ -354,6 +420,11 @@ def run_step(grants="[]", image=True, digest_fails=False, providers=f"github={GH
             os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
             with open(os.path.join(d, rel), "w") as f:
                 f.write("{}")
+        os.makedirs(os.path.join(d, "backend", "permits"))   # up.sh backend_permits_dir
+    if window is not None:   # an open discovery window, as `sudo ekka desk grant discovery` wrote it
+        os.makedirs(os.path.join(d, "backend"), exist_ok=True)
+        with open(os.path.join(d, "backend", "desks-grant.extras.json"), "w") as f:
+            json.dump(window, f)
     for name, text in (own_profiles or {}).items():   # this install's own profiles, as an operator puts them there
         os.makedirs(os.path.join(d, "providers.local"), exist_ok=True)
         with open(os.path.join(d, "providers.local", name + ".yaml"), "w") as f:
@@ -454,6 +525,33 @@ class UpShStep(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([(c["kind"], c.get("grant")) for c in calls if c["kind"] in ("add", "revoke")],
                          [("add", None), ("revoke", "g-old")], "add first, revoke after: never without a grant")
+
+    def test_an_open_window_puts_its_block_in_a_new_grant_and_restore_takes_it_out_again(self):
+        w = dg.window("ghcr.io/example/project@sha256:" + "a" * 64, ["github"], 60, NOW)
+        r, calls, _ = run_step(window=w, grants=json.dumps([row("g-shipped", {"image_digests": [IMAGE]})]))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [add] = [c for c in calls if c["kind"] == "add"]
+        self.assertEqual(add["limits"]["discovery"], w["discovery"])
+        self.assertIn("sha256:" + "a" * 64, add["limits"]["image_digests"])
+        self.assertEqual(errors(add["limits"]), [])
+        self.assertEqual([(c["kind"], c.get("grant")) for c in calls if c["kind"] in ("add", "revoke")],
+                         [("add", None), ("revoke", "g-shipped")], "add first, revoke after: never without a grant")
+        # restore: the window file is gone, so the same step writes the shipped limits, again add first
+        r, calls, _ = run_step(grants=json.dumps([row("g-window", add["limits"])]))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [back] = [c for c in calls if c["kind"] == "add"]
+        self.assertNotIn("discovery", back["limits"])
+        self.assertEqual(back["limits"]["image_digests"], [IMAGE], "the window's image leaves the grant too")
+        self.assertEqual([(c["kind"], c.get("grant")) for c in calls if c["kind"] in ("add", "revoke")],
+                         [("add", None), ("revoke", "g-window")])
+
+    def test_planted_a_window_from_an_older_installer_changes_no_grant(self):
+        old = {"images": ["sha256:" + "a" * 64], "policy_digests": ["sha256:" + "b" * 64], "cidrs": ["1.0.0.0/8"],
+               "ports": [80, 443], "image_ref": "r", "policy_file": "f", "since": "2026-10-31T16:00:00Z"}
+        r, calls, _ = run_step(window=old)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("older installer", r.stderr)
+        self.assertEqual([c for c in calls if c["kind"] in ("add", "revoke")], [])
 
     def test_planted_keycloak_not_answering_is_named_and_the_adapter_never_runs(self):
         # Measured on a server: Keycloak was still starting, the adapter got an empty stdin, and the install blamed

@@ -180,8 +180,8 @@ class TheWrapper(unittest.TestCase):
             self.assertEqual(run(["desk", "grant", "show"]), "up.sh grant show")
             self.assertEqual(run(["desk", "registry", "show"]), "up.sh registry show")
             self.assertEqual(run(["desk", "image", "pull", "r/n@sha256:" + "a" * 64]), "up.sh image pull r/n@sha256:" + "a" * 64)
-            self.assertEqual(run(["desk", "grant", "discovery", "--image", "r@sha256:" + "a" * 64, "--policy", "/p.json"]),
-                             "up.sh grant discovery --image r@sha256:" + "a" * 64 + " --policy /p.json")
+            self.assertEqual(run(["desk", "grant", "discovery", "--image", "r@sha256:" + "a" * 64, "--providers", "github"]),
+                             "up.sh grant discovery --image r@sha256:" + "a" * 64 + " --providers github")
             self.assertEqual(run(["desk", "connect", "claude-code"], stdin="k-not-a-secret"), "up.sh connect claude-code")
             self.assertEqual(open(cap).read(), "k-not-a-secret", "the piped key reaches the installer's connect, and nothing else")
             self.assertTrue(run(["desk", "connect"]).startswith("runuser "), "no provider: the binary lists the kinds of connection")

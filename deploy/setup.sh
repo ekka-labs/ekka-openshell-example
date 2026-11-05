@@ -8,6 +8,8 @@
 #   setup.sh people-scopes                   people's desk sign-ins read-only on a running install (up.sh, every run)
 #   setup.sh enclave-config <env> <workspace>  the Enclave's OpenShell keys, issuer mode, in its enclave.env (native home)
 #   setup.sh enclave-secret <env>            the Enclave client's secret, piped from Keycloak into the vault
+#   setup.sh enclave-backend <env>           the backend adapter's subject and the discovery permits folder, in
+#                                            enclave.env; prints `changed` or `kept` (up.sh restarts the Enclave on changed)
 #   setup.sh people                          the bundle each person runs once: the desks CA and backend.json
 #   setup.sh supervisor                      the desks' supervisor binary from the pinned image (again after a pin bump)
 #   setup.sh preflight                       refuse, by name, a gateway that could hand credentials out
@@ -182,6 +184,9 @@ EKKA_OPENSHELL_EXECUTOR_CLIENT_ID=ekka-enclave
 EKKA_OPENSHELL_EXECUTOR_CLIENT_SECRET_NAME=OPENSHELL_EXECUTOR_CLIENT_SECRET
 EKKA_DESKS_AUTO=true
 EOF
+  # The backend adapter's lines, once its client exists (up.sh step_desk_admin makes it, after this first start, and
+  # writes them then with `enclave-backend`); kept here so running this stage again never drops them.
+  local bsubj; if bsubj=$(stage_backend_subject 2>/dev/null); then enclave_backend_lines "$bsubj" >> "$f"; fi
   # merged into the Enclave's ONE config file, keeping every key the enrollment wrote. Prod keeps its files at the
   # top of the Enclave's home; every other environment in a folder named after it. Written whole, as the Enclave's
   # user, 0600: the daemon reads this file directly and refuses one another user owns.
@@ -193,13 +198,41 @@ EOF
   say "the Enclave now knows this machine's desk gateway and gets its gateway tokens from the sign-in service (its previous settings are kept in enclave.env.before-desks)"
 }
 
-stage_enclave_subject() {
+client_subject() {  # client_subject <client id>: the OIDC subject of that client's service account, as Keycloak names it
   kc_env
-  python3 - 2>/dev/null <<'PY' || { echo "setup: Keycloak did not answer for the Enclave client's subject (is the sign-in service up? journalctl -u ekka-desks)" >&2; return 1; }
+  python3 - "$1" 2>/dev/null <<'PY' || { echo "setup: Keycloak did not answer for the $1 client's subject (is the sign-in service up, and the client made? journalctl -u ekka-desks)" >&2; return 1; }
 import sys,json; sys.path.insert(0,"keycloak"); import apply_realm as a
-api=a.Api(); spec=json.load(open(a.SPEC)); c=a.find_client(api,spec,"ekka-enclave")
+api=a.Api(); spec=json.load(open(a.SPEC)); c=a.find_client(api,spec,sys.argv[1])
 print(api.get(a.realm_path(spec,f"/clients/{c['id']}/service-account-user"))["id"])  # workspace membership names the bare subject
 PY
+}
+stage_enclave_subject() { client_subject ekka-enclave; }
+# The backend adapter's own sign-in (apply_realm.py ADMIN_CLIENT): the only caller the Enclave's gateway interceptor
+# lets switch a desk's approval mode.
+stage_backend_subject() { client_subject ekka-desk-admin; }
+
+# The two lines the Enclave's gateway interceptor reads for discovery's auto approval mode: who the backend adapter is,
+# and where it writes the permits (up.sh backend_permits_dir; the adapter's <state_dir>/permits in its container).
+enclave_backend_lines() {
+  [[ $1 =~ ^[A-Za-z0-9-]{1,64}$ ]] || { echo "setup: '$1' is not a Keycloak subject" >&2; return 1; }
+  printf 'EKKA_OPENSHELL_BACKEND_SUBJECT=user:oidc:%s\nEKKA_OPENSHELL_DISCOVERY_PERMITS_DIR=%s\n' "$1" "$DESKS_STATE/backend/permits"
+}
+
+# enclave-backend <env>: those two lines merged into the Enclave's enclave.env, every other line kept as it is. Written
+# whole, as the Enclave's user, 0600, and only when they differ; prints `changed` or `kept`.
+stage_enclave_backend() {
+  local env=${1:-}; [[ -n $env ]] || die "usage: enclave-backend <env>"
+  kc_env
+  wait_keycloak >&2   # its progress dots on stderr: stdout is the one word up.sh reads
+  local subj; subj=$(stage_backend_subject) || die "Keycloak did not name the ekka-desk-admin client's subject; nothing written"
+  local lines; lines=$(enclave_backend_lines "$subj") || die "Keycloak named a subject that is not one; nothing written"
+  local envdir=$env; [[ $env == prod ]] && envdir=.
+  local before; before=$(enclave_home_read "$envdir/enclave.env") || die "no enclave.env for $env in the Enclave's home: enroll first"
+  local after; after=$(grep -v -E '^EKKA_OPENSHELL_(BACKEND_SUBJECT|DISCOVERY_PERMITS_DIR)=' <<<"$before" || true)
+  after=$(printf '%s\n%s' "$after" "$lines")
+  if [[ $after == "$before" ]]; then echo kept; return 0; fi
+  printf '%s\n' "$after" | enclave_home_file "$envdir/enclave.env" 0600
+  echo changed
 }
 
 wait_keycloak() {  # Keycloak answers its master realm and a token call; started here if it is not up (the stack unit may be masked)
@@ -336,6 +369,7 @@ case "${1:-}" in
   enclave-config) stage_enclave_config "${@:2}" ;;
   enclave-secret) stage_enclave_secret "${@:2}" ;;
   enclave-subject) stage_enclave_subject ;;
+  enclave-backend) stage_enclave_backend "${@:2}" ;;
   people) stage_people ;;
   supervisor) stage_supervisor ;;
   preflight) gateway_preflight ;;

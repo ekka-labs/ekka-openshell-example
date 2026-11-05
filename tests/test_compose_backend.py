@@ -90,12 +90,32 @@ class TheAdapterService(unittest.TestCase):
                          [("ekka-backend-state", "/var/lib/ekka-backend")],
                          "the recovery store, and no other volume: no ekka-home")
         # The socket folder is the host's /run/ekka-backend (tmpfiles, 0700 ekka), where the native Enclave dials it,
-        # and two FILES, read-only: its configuration and the gateway's CA. Never a folder of the home, never docker.sock.
-        self.assertEqual(sorted(files), ["/etc/ekka-backend/ca.pem", "/etc/ekka-backend/config.json", "/run/ekka-backend"])
+        # the discovery permits folder the Enclave reads, and two FILES, read-only: its configuration and the gateway's
+        # CA. Never a folder of the home, never docker.sock.
+        self.assertEqual(sorted(files), ["/etc/ekka-backend/ca.pem", "/etc/ekka-backend/config.json", "/run/ekka-backend",
+                                         "/var/lib/ekka-backend/permits"])
         self.assertEqual(files["/run/ekka-backend"]["source"], "/run/ekka-backend")
-        self.assertTrue(all(v.get("read_only") is True for t, v in files.items() if t != "/run/ekka-backend"))
-        self.assertEqual(sorted(os.path.basename(v["source"]) for v in files.values()), ["ca.crt", "config.json", "ekka-backend"])
-        self.assertEqual(len(self.svc["volumes"]), 4)
+        writable = ("/run/ekka-backend", "/var/lib/ekka-backend/permits")
+        self.assertTrue(all(v.get("read_only") is True for t, v in files.items() if t not in writable))
+        self.assertEqual(sorted(os.path.basename(v["source"]) for v in files.values()),
+                         ["ca.crt", "config.json", "ekka-backend", "permits"])
+        self.assertEqual(len(self.svc["volumes"]), 5)
+
+    def test_writes_the_discovery_permits_into_the_host_folder_the_enclave_reads(self):
+        # The adapter writes <state_dir>/permits/<sandbox id>.json (state_dir: the adapter configuration's default,
+        # /var/lib/ekka-backend; tools/adapter_config.py sets no other), and the native Enclave's interceptor reads the
+        # same files at <DESKS_STATE>/backend/permits (deploy/setup.sh enclave_backend_lines). Read-write here, in no
+        # other container.
+        state = self.on["services"]["ekka-backend"]
+        (permits,) = [v for v in state["volumes"] if v["target"] == "/var/lib/ekka-backend/permits"]
+        self.assertEqual(permits["type"], "bind")
+        self.assertFalse(permits.get("read_only"), "the adapter writes and deletes permits here")
+        self.assertRegex(permits["source"], r"/backend/permits$")
+        holders = sorted(n for n, s in self.on["services"].items()
+                         if any((v.get("source") or "").endswith("/backend/permits") for v in s.get("volumes") or []))
+        self.assertEqual(holders, ["ekka-backend"], "no other container reads or plants a permit")
+        with open(os.path.join(ROOT, "vendor", "ekka-contracts", "backend", "adapter-config.v1.schema.json")) as f:
+            self.assertEqual(json.load(f)["properties"]["state_dir"]["default"] + "/permits", permits["target"])
 
     def test_reaches_only_the_gateway_and_the_sign_in_front(self):
         self.assertEqual(list(self.svc["networks"]), ["backend"])
