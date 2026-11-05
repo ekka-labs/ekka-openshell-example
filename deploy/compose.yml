@@ -142,6 +142,13 @@ services:
     volumes:
       - /run/ekka-backend:/run/ekka-backend             # the Enclave dials the adapter's socket here (tmpfiles folder, 0700 ekka)
       - ekka-backend-state:/var/lib/ekka-backend
+      # The discovery permits, read-write and in this container only: the adapter writes one per discovery desk under
+      # its state_dir (<state_dir>/permits), and the native Enclave's gateway interceptor reads the same host folder.
+      # The Enclave's user's, 0750, made by up.sh (backend_permits_dir); never created by Docker.
+      - type: bind
+        source: ${DESKS_STATE:-/var/lib/ekka-agent-desks}/backend/permits
+        target: /var/lib/ekka-backend/permits
+        bind: {create_host_path: false}
       # Files, never created by Docker: a missing one is refused by name ("bind source path does not exist"),
       # instead of becoming an empty directory the adapter then cannot read (measured; regression review).
       - type: bind

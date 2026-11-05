@@ -566,11 +566,31 @@ write_adapter_config() {
     || die "the backend adapter's configuration was not written; see the line above"
 }
 
+# The discovery permits (contracts backend/discovery-permit.v1): the backend adapter writes one, for one discovery desk,
+# only after it read OpenShell's auto approval mode back as applied, and deletes it before it sets manual again; the
+# Enclave's gateway interceptor lets that desk's proposals through only while it holds. The adapter runs as the
+# Enclave's user (compose `user: 2000`), and the Enclave reads it natively as that user, so the folder is theirs, 0750,
+# group the Enclave's: nobody else reads or plants a permit. Bound read-write into the adapter's container only
+# (compose.yml); made before anything can start the adapter, because compose never creates it (create_host_path: false).
+backend_permits_dir() {
+  local d=$DESKS_STATE/backend/permits
+  [[ -L $d || -L $DESKS_STATE/backend ]] && die "$d (or its folder) is a link; it must be a real folder. Remove the link and run again"
+  install -d -m 0755 "$DESKS_STATE/backend"
+  install -d -m 0750 -o "$ENCLAVE_USER" -g "$ENCLAVE_USER" "$d" || die "the discovery permits folder $d could not be made"
+  [[ $(stat -c '%U:%G %a' "$d") == "$ENCLAVE_USER:$ENCLAVE_USER 750" ]] || die "$d is not $ENCLAVE_USER:$ENCLAVE_USER 0750"
+}
+
 step_desk_admin() {  # desk administration through EKKA: only once up.env runs the backend adapter (ADK-E6)
   grep -q '^EKKA_BACKEND_IMAGE=.' "$DESKS_STATE/up.env" 2>/dev/null || return 0
   say "desk administration through EKKA"
   connect_desk_admin
   write_adapter_config
+  backend_permits_dir
+  # The Enclave's interceptor learns who the adapter is (the ekka-desk-admin client's subject, which exists only once
+  # connect_desk_admin made it) and where the permits are. Both lines unset is the interceptor's old behaviour, so a
+  # changed file restarts the Enclave, below, and an unchanged one changes nothing.
+  local enclave_env; enclave_env=$(cd deploy && bash setup.sh enclave-backend "${EKKA_ENV:-prod}") \
+    || die "the Enclave's settings for the backend adapter were not written; run again"
   # Only now, with its configuration in place, the adapter's profile goes on and the adapter starts.
   grep -q '^COMPOSE_PROFILES=desk-admin$' "$DESKS_STATE/up.env" || echo "COMPOSE_PROFILES=desk-admin" >> "$DESKS_STATE/up.env"
   sed -i 's/^DESKS_STACK_SERVICES=.*/DESKS_STACK_SERVICES="keycloak-db keycloak edge gateway ekka-backend"/' "$DESKS_STATE/up.env"
@@ -581,6 +601,10 @@ step_desk_admin() {  # desk administration through EKKA: only once up.env runs t
     [[ $(docker inspect -f '{{.State.Health.Status}}' ekka-desks-ekka-backend-1 2>/dev/null) == healthy ]] && break; sleep 2; done
   (( i < 60 )) || die "the backend adapter did not become healthy; see: sudo ./deploy/setup.sh compose logs ekka-backend"
   ok "the backend adapter is running, with its configuration"
+  if [[ $enclave_env == changed ]]; then
+    systemctl restart ekka || die "the Enclave did not restart onto its new settings; see: journalctl -u ekka"
+    wait_enclave; ok "the Enclave restarted: its gateway interceptor knows the backend adapter and the discovery permits"
+  fi
 }
 
 step_admin() {
@@ -622,18 +646,6 @@ snapshot_stack() {  # a ROOT-OWNED copy of deploy/, tools/, providers/ and this 
   chown -R root:root "$SNAPSHOT.new"; chmod -R u+rwX,go+rX,go-w "$SNAPSHOT.new"
   rm -rf "$SNAPSHOT.old"; [[ -d $SNAPSHOT ]] && mv "$SNAPSHOT" "$SNAPSHOT.old"; mv "$SNAPSHOT.new" "$SNAPSHOT"; rm -rf "$SNAPSHOT.old"
   install -D -m 0755 -o root -g root deploy/host/libexec/wait-interceptor /usr/local/libexec/ekka-desks/wait-interceptor
-}
-
-packs_local_safe() {  # this install's own packs: a root-owned folder of root-owned files, never a link, never writable by others
-  local d=$DESKS_STATE/packs.local f
-  [[ -e $d ]] || return 0
-  [[ -d $d && ! -L $d && $(stat -c '%u' "$d") == 0 && $(( 8#$(stat -c '%a' "$d") & 8#022 )) == 0 ]] \
-    || die "$d must be a real folder owned by root and writable by no one else"
-  for f in "$d"/*.json; do
-    [[ -e $f ]] || continue
-    [[ -f $f && ! -L $f && $(stat -c '%u' "$f") == 0 && $(( 8#$(stat -c '%a' "$f") & 8#022 )) == 0 ]] \
-      || die "$f must be a real file owned by root and writable by no one else"
-  done
 }
 
 refuse_if_renamed() {  # the public name is bound at init, and a run under another name skipped init and changed nothing it binds
@@ -696,6 +708,7 @@ step_start() {
   # desk credentials out.
   (cd deploy && bash setup.sh supervisor >/dev/null) || die "the supervisor binary could not be put in place"
   (cd deploy && bash setup.sh preflight) || die "the gateway preflight refused (above); nothing was started"
+  backend_permits_dir   # the adapter's permits folder, before any start (compose never creates it)
   (cd deploy && bash setup.sh backend-preflight)   # with desk-admin on, the stack starts the adapter too
   local stack_sha; stack_sha=$( { cat deploy/compose.yml deploy/pins.json deploy/edge/nginx.conf deploy/host/ekka-desks.service.template "$DESKS_STATE/up.env"; } | sha256sum | cut -c1-16)
   if is_done started; then
@@ -946,13 +959,10 @@ print(agent[0] if agent else "", api[0] if api else "")') || true
   install -d -m 0755 "$(dirname "$limits")"
   # Collected FIRST, so a refusal stops here: inside $(...) on the limits line a failure would be lost.
   local providers; providers=$(desk_provider_args) || die "the providers' digests could not be read; no grant was changed"
-  # A discovery window (sudo ekka desk grant discovery …) adds its image, policy, address range and ports, from the
-  # extras file it wrote; `restore` removes that file, and this step writes the shipped limits again.
-  local extras_file=$DESKS_STATE/backend/desks-grant.extras.json extra_args=() word
-  if [[ -f $extras_file ]]; then
-    while IFS= read -r word; do extra_args+=("$word"); done < <(python3 tools/desk_grant.py extras-args "$extras_file") \
-      || die "the discovery window's extras could not be read; no grant was changed"
-  fi
+  # A discovery window (sudo ekka desk grant discovery …) adds its image and the grant's `discovery` block, from the
+  # window file it wrote; `restore` removes that file, and this step writes the shipped limits again.
+  local extras_file=$DESKS_STATE/backend/desks-grant.extras.json extra_args=()
+  [[ -f $extras_file ]] && extra_args=(--window "$extras_file")
   # The ceiling comes from the very profile files the gateway holds (sync_profiles imports the same ones), so a
   # profile can never sit outside it: an install's own providers.local file in place of the shipped one.
   local profile_args=() pname psrc
@@ -960,7 +970,7 @@ print(agent[0] if agent else "", api[0] if api else "")') || true
     psrc=$(profile_source "$pname") || die "profile $pname could not be read; no grant was changed"
     profile_args+=(--profile "$psrc")
   done
-  # shellcheck disable=SC2086  # one --provider word and one name=digest word per provider; the extras expand to nothing when absent
+  # shellcheck disable=SC2086  # one --provider word and one name=digest word per provider; the window expands to nothing when absent
   python3 tools/desk_grant.py limits --image-id "$desk_id" --policy-digest "$pdig" $providers "${profile_args[@]}" ${extra_args[@]+"${extra_args[@]}"} > "$limits.new" \
     || die "the desks grant's limits could not be written; no grant was changed"
   mv "$limits.new" "$limits"
@@ -1076,7 +1086,7 @@ image_pull() {  # image_pull <ref@sha256:…> [--signed-by <identity> --issuer <
   docker image inspect --format '{{join .RepoDigests "\n"}}' "$ref" 2>/dev/null | grep -q -F "@$digest" \
     || die "the pulled image does not carry $digest; nothing to use"
   ok "pulled $ref"
-  echo "   next, to let one desk be made from it for discovery: sudo ekka desk grant discovery --image $ref --policy <policy file>"
+  echo "   next, to let one desk be made from it for discovery: sudo ekka desk grant discovery --image $ref --providers <provider>,<provider>"
 }
 
 step_people() {
@@ -1219,51 +1229,42 @@ case "${1:-}" in
       pull) image_pull "${@:3}"; exit $? ;;
       *) die "usage: sudo ekka desk image pull <registry>/<name>@sha256:<64 hex> [--signed-by <certificate identity> --issuer <oidc issuer>]" ;;
     esac ;;
-  grant)  # the desks grant's limits: sudo ekka desk grant show | discovery --image <ref@sha256:…> --policy <file> | restore
+  grant)  # the desks grant's limits: sudo ekka desk grant show | discovery --image <ref@sha256:…> --providers <a,b> [--minutes 60] | restore
     [[ $(id -u) == 0 ]] || die "run with sudo"; [[ -f $DESKS_STATE/up.env ]] || die "not installed yet"
     limits=$DESKS_STATE/backend/desks-grant.json; extras=$DESKS_STATE/backend/desks-grant.extras.json
     case "${2:-}" in
-      packs)  # the network packs this install has: shipped ones (desk/packs) and its own (packs.local)
-        packs_local_safe; python3 tools/desk_grant.py packs --state "$DESKS_STATE"; exit 0 ;;
       show)
         [[ -f $limits ]] || die "no desks grant yet: the install writes it once the backend adapter is on"
         python3 tools/desk_grant.py show "$limits" "$extras" --profiles "$(profile_names | paste -sd, -)"; exit 0 ;;
-      discovery)  # ekka-ai/.github#784: open the grant for ONE project's discovery run, logged, until `restore`
-        shift 2; ref=""; pol=""; packs=""
-        while (( $# )); do case "$1" in --image) ref=${2:-}; shift 2 ;; --policy) pol=${2:-}; shift 2 ;; --packs) packs=${2:-}; shift 2 ;;
-          *) die "usage: sudo ekka desk grant discovery --image <registry>/<name>@sha256:<64 hex> --packs <pack>,<pack>   (or --policy <file>)" ;; esac; done
-        if [[ -n $packs ]]; then
-          # The packs combined with the shipped policy, checked against OpenShell's overlap rules before any desk exists.
-          [[ -z $pol ]] || die "name --packs or --policy, not both"
-          packs_local_safe
-          pol=$DESKS_STATE/backend/discovery-composed.json
-          python3 tools/desk_grant.py compose "$packs" --state "$DESKS_STATE" > "$pol.new" || { rm -f "$pol.new"; die "the packs could not be combined; nothing was changed"; }
-          mv "$pol.new" "$pol"; ok "packs $packs combined into one policy ($pol)"
-        fi
+      discovery)  # open the grant for ONE project's discovery desk: its image, its providers, until it expires or `restore`
+        shift 2; ref=""; providers=""; minutes=60
+        while (( $# )); do case "$1" in --image) ref=${2:-}; shift 2 ;; --providers) providers=${2:-}; shift 2 ;; --minutes) minutes=${2:-}; shift 2 ;;
+          *) die "usage: sudo ekka desk grant discovery --image <registry>/<name>@sha256:<64 hex> --providers <provider>,<provider> [--minutes 60, at most 240]" ;; esac; done
         [[ $ref =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$ ]] \
           || die "--image must be <registry>/<name>@sha256:<64 hex>, the exact image the desk is created from (a tag can move; a digest cannot)"
-        [[ -n $pol && -f $pol ]] || die "--policy must name a policy file, for example $PWD/desk/policy-discovery.json"
+        [[ -n $providers ]] || die "--providers must name the providers the discovery desk may hold, for example github,bitbucket"
         [[ -f $extras ]] && die "a discovery window is already open ($(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("image_ref"), "since", d.get("since"))' "$extras")); end it first: sudo ekka desk grant restore"
-        image=$(sed -n 's/^EKKA_BACKEND_IMAGE=//p' "$DESKS_STATE/up.env"); [[ -n $image ]] || die "the backend adapter is not on; the grant does not exist yet"
-        pdig=$(docker run --rm -i --network none "$image" digest policy - < "$pol") || die "the backend adapter could not digest $pol; nothing was changed"
-        install -m 0644 -o root -g root "$pol" "$DESKS_STATE/backend/discovery-policy.json"
-        python3 tools/desk_grant.py window "$DESKS_STATE/backend/discovery-policy.json" --image-digest "${ref##*@}" --policy-digest "$pdig" --image-ref "$ref" > "$extras.new" \
-          || { rm -f "$extras.new" "$DESKS_STATE/backend/discovery-policy.json"; die "the window could not be written; nothing was changed"; }
+        [[ -f $limits ]] || die "no desks grant yet: the install writes it once the backend adapter is on"
+        python3 tools/desk_grant.py window --image-ref "$ref" --providers "$providers" --minutes "$minutes" --limits "$limits" > "$extras.new" \
+          || { rm -f "$extras.new"; die "the window could not be written; nothing was changed"; }
         mv "$extras.new" "$extras"
-        ( step_desk_grant ) || { rm -f "$extras" "$DESKS_STATE/backend/discovery-policy.json"; die "the desks grant was not changed; the window is not open"; }
+        ( step_desk_grant ) || { rm -f "$extras"; die "the desks grant was not changed; the window is not open"; }
         python3 tools/desk_grant.py show "$limits" "$extras"
         echo
-        echo "The window is open. Make the disposable desk, as root, with exactly this image and policy:"
-        echo "  ekka desk create discovery-desk --image $ref --policy $DESKS_STATE/backend/discovery-policy.json --provider claude-code"
-        echo "Run the project's build on it once; every connection it makes is in OpenShell's log. Then delete the desk and:"
+        echo "The window is open. One desk, named discover-<anything>, created from exactly this image with only these"
+        echo "providers before the window closes, may be switched to NVIDIA OpenShell's auto approval mode through the"
+        echo "desks API (approval_mode), which writes its permit. When the discovery run is done and its desk deleted:"
         echo "  sudo ekka desk grant restore"
         exit 0 ;;
       restore)
-        [[ -f $extras ]] || { echo "no discovery window is open; the shipped limits are in force"; exit 0; }
-        rm -f "$extras" "$DESKS_STATE/backend/discovery-policy.json"
+        # Nothing to end when neither the window file nor the grant in force holds a window.
+        [[ -f $extras ]] || python3 -c 'import json,sys; sys.exit(0 if "discovery" in json.load(open(sys.argv[1])) else 1)' "$limits" 2>/dev/null \
+          || { echo "no discovery window is open; the shipped limits are in force"; exit 0; }
+        # the window file, and what a window from before this release kept beside it
+        rm -f "$extras" "$DESKS_STATE/backend/discovery-policy.json" "$DESKS_STATE/backend/discovery-composed.json"
         ( step_desk_grant ) || die "the shipped limits could not be written back; check: sudo ekka desk grant show"
         ok "the discovery window is closed: the shipped limits are back"; exit 0 ;;
-      *) die "usage: sudo ekka desk grant show | packs | discovery --image <ref@sha256:…> --packs <a,b> | restore" ;;
+      *) die "usage: sudo ekka desk grant show | discovery --image <ref@sha256:…> --providers <a,b> [--minutes 60] | restore" ;;
     esac ;;
   desk-grant)  # the desks grant again, for the installed base image: sudo ./up.sh desk-grant
     # Recomputes the installed image and policy limits and installs the admin plans; this is not a preview.

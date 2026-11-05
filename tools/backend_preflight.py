@@ -1,4 +1,5 @@
-"""Before the backend adapter starts: its configuration and the gateway's CA must be real files.
+"""Before the backend adapter starts: its configuration and the gateway's CA must be real files, and its discovery
+permits folder a real folder.
 
     python3 tools/backend_preflight.py <state folder> [--always]
 
@@ -7,7 +8,9 @@ missing, Docker's short bind syntax CREATES AN EMPTY DIRECTORY in its place and 
 compose.yml asks for the opposite (`create_host_path: false`), and Compose v2.38.2 and v5.5.1 honor it (measured),
 but that is Compose's behavior, version by version, and an older Compose renders and treats it differently.
 So this check does not lean on Compose: before any start, each file must exist, be a regular file and not a
-link, or nothing is started and each reason is printed with its fix.
+link, or nothing is started and each reason is printed with its fix. The same for the one folder it binds read-write,
+`backend/permits` (the discovery permits, which the native Enclave reads): a folder Docker made in its place would be
+root's, and the adapter could write no permit there.
 
 It runs only when the adapter would start: the `desk-admin` profile is on in up.env. `--always` checks anyway,
 for a command that runs the adapter by name (a profile does not stop that).
@@ -21,6 +24,9 @@ import sys
 FILES = (
     ("backend/config.json", "the adapter's configuration, written once this machine is enrolled: run sudo ./up.sh"),
     ("tls/ca.crt", "the gateway's CA, made by setup.sh init: run sudo ./up.sh"),
+)
+DIRS = (
+    ("backend/permits", "the discovery permits folder, the Enclave's user's, 0750, made by sudo ./up.sh"),
 )
 
 
@@ -57,6 +63,20 @@ def reasons(state):
             out.append(f"{path} is a directory, as a bind of a missing file leaves behind; remove it, then it is {fix}")
         elif not stat.S_ISREG(st.st_mode):
             out.append(f"{path} is not a regular file; it is {fix}")
+    for rel, fix in DIRS:
+        path = os.path.join(state, rel)
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            out.append(f"{path} does not exist; it is {fix}")
+            continue
+        except OSError as e:
+            out.append(f"{path} cannot be read ({e.strerror}); it is {fix}")
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            out.append(f"{path} is a link, not the folder itself; remove it, then it is {fix}")
+        elif not stat.S_ISDIR(st.st_mode):
+            out.append(f"{path} is not a folder; remove it, then it is {fix}")
     return out
 
 

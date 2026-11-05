@@ -214,24 +214,39 @@ Gateway reads such as `ekka desk logs` and `ekka desk connections` now work from
 ## Onboarding a project: the discovery window
 
 A project's desk image holds tools only; its dependencies arrive over the network at build time. To learn which hosts
-that is, without a guess-and-retry loop, run the project's build ONCE on a disposable desk whose network is open and
-logged, then close the policy to exactly what the log shows (ekka-ai/.github#784). As root on the server:
+that is, without a guess-and-retry loop, the project's build runs ONCE on a disposable desk in NVIDIA OpenShell's auto
+approval mode, and the recommended policy is written from what OpenShell recorded. As root on the server:
 
 ```sh
 <token> | sudo ekka desk registry login ghcr.io <user>      # once per registry; a read-only token, from a pipe
 sudo ekka desk image pull ghcr.io/<org>/<image>@sha256:<64 hex> --signed-by https://github.com/<org>/<repo>/.github/workflows/<build>.yml@refs/heads/main --issuer https://token.actions.githubusercontent.com
-sudo ekka desk grant packs                                   # what each pack opens (desk/packs/README.md)
-sudo ekka desk grant discovery --image ghcr.io/<org>/<image>@sha256:<64 hex> --packs github,rust
-ekka desk create discovery-desk --image ghcr.io/<org>/<image>@sha256:<64 hex> --policy /var/lib/ekka-agent-desks/backend/discovery-policy.json --provider github
-# the project's build on the desk, once, through an EKKA job; then:
-ekka desk logs discovery-desk           # OpenShell's records: ALLOWED <binary> -> <host>:<port>
-ekka desk delete discovery-desk
+sudo ekka desk grant discovery --image ghcr.io/<org>/<image>@sha256:<64 hex> --providers github,bitbucket
+sudo ekka desk grant show               # the window: its image, its providers, and when it closes
+# the discovery run, through EKKA: it creates discover-<run> from that image, turns auto mode on, builds once,
+# reads what OpenShell recorded, turns auto mode off and deletes the desk; then:
 sudo ekka desk grant restore
 ```
 
+What holds it to one desk:
+
+- The grant's `discovery` block names the image, the providers and the closing time. The backend adapter turns auto
+  mode on only for a desk named `discover-*`, created from that image, holding no other provider, while the window is
+  open. Any other desk is refused.
+- The adapter writes a permit for that desk only after it reads the setting back as applied, deletes it before it
+  turns auto mode off, and deletes it with the desk. The permits live in `/var/lib/ekka-agent-desks/backend/permits`,
+  owned by the Enclave's user, 0750, mounted read-write into the adapter's container only.
+- The Enclave's gateway interceptor reads that folder (`EKKA_OPENSHELL_DISCOVERY_PERMITS_DIR` in the Enclave's
+  `enclave.env`) and lets a desk's policy proposals through only while its permit is present and unexpired. Only the
+  adapter's own sign-in (`EKKA_OPENSHELL_BACKEND_SUBJECT`, the `ekka-desk-admin` client) may change the setting. The
+  install writes both lines and restarts the Enclave when they change.
+
+OpenShell still holds what it models as risky (private, link-local and metadata addresses, wildcard hosts, database
+ports, high ports). Auto mode does not stop code on the desk from sending something it already holds to a public host
+it may reach, so the desk gets no production credential.
+
 The image must already be on this machine: OpenShell creates a desk from a local image and pulls with no registry login
 (NVIDIA/OpenShell#2676), so `ekka desk image pull` does the pull as root, by digest, with the kept read-only credential
-through a Docker login that is deleted right after. `desk/README.md` explains the two policy files.
+through a Docker login that is deleted right after.
 
 ## The backend adapter's image
 
