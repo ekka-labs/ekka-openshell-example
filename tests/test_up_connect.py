@@ -14,6 +14,16 @@ import unittest
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 KEY = "ghp_" + "Zx9" * 12
+KEYLESS = """id: registries
+display_name: "Public package registries (no key)"
+category: other
+credentials: []
+endpoints:
+  - host: registry.npmjs.org
+    port: 443
+    access: read-only
+binaries: [/usr/local/bin/node]
+"""
 
 STUB = r"""#!/usr/bin/env python3
 import hashlib, json, os, sys
@@ -31,10 +41,11 @@ def functions(text=None):
         with open(os.path.join(ROOT, "up.sh"), encoding="utf-8") as f:
             text = f.read()
     out = []
-    for name in ("connect_cmd", "connect_provider"):
+    for name in ("connect_cmd", "connect_provider", "connect_keyless"):
         m = re.search(rf"^{name}\(\) \{{.*?^\}}\n", text, re.S | re.M)
-        assert m, f"{name} is not in up.sh"
-        out.append(m.group(0))
+        assert m or name == "connect_keyless", f"{name} is not in up.sh"   # optional, so the cases run on older code too
+        if m:
+            out.append(m.group(0))
     return "\n".join(out)
 
 
@@ -45,13 +56,16 @@ def run(args, stdin_bytes=None, exists=False, tty=False, up=None, refresh_fails=
         f.write(STUB)
     os.chmod(stub, 0o755)
     calls = os.path.join(d, "calls.jsonl")
+    with open(os.path.join(d, "registries.yaml"), "w") as f:
+        f.write(KEYLESS)
     script = f"""
 set -euo pipefail
 DESKS_STATE={d}; OS={stub}; NAME=${{NAME:-desks.example.com}}
 ok() {{ echo "ok: $*"; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
-profile_names() {{ printf '%s\\n' claude-code codex github; }}
-profile_source() {{ echo "providers/$1.yaml"; }}
+profile_names() {{ printf '%s\\n' claude-code codex github registries; }}
+# `registries` stands for a keyless profile (credentials: []); the others are the shipped files.
+profile_source() {{ if [[ $1 == registries ]]; then echo "$DESKS_STATE/registries.yaml"; else echo "providers/$1.yaml"; fi; }}
 as_gateway_admin() {{ ( "$@" ); }}
 # The desks grant's refresh, stubbed: tests/test_desk_grant.py runs the real one. It records what it can see.
 step_desk_grant() {{ printf '{{"after_calls": %s, "secret_seen": "%s"}}\n' "$(wc -l < "$CALLS" | tr -d ' ')" "${{secret:-}}" >> "$CALLS.refresh"
@@ -225,6 +239,62 @@ class Refuses(unittest.TestCase):
             self.assertEqual(r.returncode, 1, env)
             self.assertIn(f"names {env}, which the system itself reads", r.stderr)
             self.assertEqual(r.stdout, "", "no name is printed for up.sh to use")
+
+
+class Keyless(unittest.TestCase):
+    """A profile with `credentials: []` (public package registries): its provider is made with no key, and the desks
+    grant refreshed, so a desk created with it reaches its hosts. Before this, connect read a key it could not use and
+    refused, so such a profile loaded but no desk could ever name it (measured on a live box, 5 Nov 2026)."""
+
+    def test_it_is_made_with_no_credential_and_the_grant_refreshed(self):
+        r, calls, log = run(["registries"], b"")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(calls[-1]["argv"], ["-g", "ekka-agent-desks", "provider", "create", "--name", "registries",
+                                             "--type", "registries", "--global-profile"])
+        self.assertEqual(calls[-1]["env_digest"], {}, "no key reaches NVIDIA's CLI")
+        self.assertIn('"command":["openshell","provider","create","--name","registries"', log, "logged like any other")
+        self.assertIn("ok: registries is connected: it takes no key", r.stdout)
+        self.assertEqual(len(r.refreshes), 1)
+        self.assertEqual(r.refreshes[0]["after_calls"], len(calls), "the grant is refreshed after the provider exists")
+
+    def test_it_works_from_a_terminal_since_nothing_is_read(self):
+        r, calls, _ = run(["registries"], tty=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(calls[-1]["argv"][2:4], ["provider", "create"])
+
+    def test_one_that_exists_is_left_as_it_is_and_the_grant_still_refreshed(self):
+        r, calls, _ = run(["registries"], b"", exists=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(any("create" in c["argv"] or "update" in c["argv"] for c in calls))
+        self.assertEqual(len(r.refreshes), 1)
+
+    def test_planted_a_key_piped_to_a_keyless_profile_is_refused_and_nothing_made(self):
+        r, calls, log = run(["registries"], KEY.encode())
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("registries takes no key; nothing was changed", r.stderr)
+        self.assertFalse(any("create" in c["argv"] for c in calls))
+        self.assertEqual(r.refreshes, [])
+        self.assertNotIn(KEY, r.stdout + r.stderr + log)
+
+    def test_planted_a_refused_refresh_says_the_provider_is_made_and_how_to_finish(self):
+        r, _, _ = run(["registries"], b"", refresh_fails=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ok: registries is connected", r.stdout)
+        self.assertIn("die: the provider registries IS made; the desks grant was not refreshed", r.stderr)
+
+    def test_only_an_explicit_empty_list_is_keyless(self):
+        tool = os.path.join(ROOT, "tools", "provider_connect.py")
+        cases = {"credentials: []\n": 0, "credentials:   [ ]  \n": 0,
+                 "": 1,                                     # no credentials line at all reads as a mistake
+                 "credentials:\n  - name: token\n    env_vars: [GITHUB_TOKEN]\n    required: true\n": 1,
+                 "credentials:\n  - name: token\n    env_vars: [GITHUB_TOKEN]\n    required: false\n": 1,
+                 "description: credentials: []\n": 1}       # not at the start of a line
+        for body, want in cases.items():
+            p = os.path.join(tempfile.mkdtemp(), "p.yaml")
+            with open(p, "w") as f:
+                f.write("id: p\n" + body)
+            got = subprocess.run(["python3", tool, "keyless", p], capture_output=True, timeout=30).returncode
+            self.assertEqual(got, want, body)
 
 
 class UpSh(unittest.TestCase):

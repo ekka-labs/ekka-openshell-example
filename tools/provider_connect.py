@@ -1,6 +1,7 @@
 """The one key a provider profile needs, for `sudo ekka desk connect <provider>` (ADK-E8, runner#1042).
 
     python3 tools/provider_connect.py key <profile file>
+    python3 tools/provider_connect.py keyless <profile file>    exit 0 when the profile declares no credential at all
 
 Prints the environment name NVIDIA's CLI reads the key from: the first `env_vars` entry of the profile's one required
 credential. A profile that needs more than one key (Codex: an access token, a refresh token and an account id) is
@@ -47,13 +48,23 @@ def key(text):
     return env
 
 
+def keyless(text):
+    """True only for `credentials: []` written out: a provider made from the profile carries no key at all (public
+    package registries, for example). A profile that leaves `credentials` out, or lists one that is not required, is
+    NOT keyless: it reads as a mistake, and `key` refuses it."""
+    return re.search(r"^credentials:[ \t]*\[[ \t]*\][ \t]*$", text, re.M) is not None
+
+
 def main(argv):
-    if len(argv) != 2 or argv[0] != "key":
-        print("usage: provider_connect.py key <profile file>", file=sys.stderr)
+    if len(argv) != 2 or argv[0] not in ("key", "keyless"):
+        print("usage: provider_connect.py key|keyless <profile file>", file=sys.stderr)
         return 2
     try:
         with open(argv[1], encoding="utf-8") as f:
-            print(key(f.read()))
+            text = f.read()
+        if argv[0] == "keyless":
+            return 0 if keyless(text) else 1
+        print(key(text))
     except (OSError, ValueError) as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 1

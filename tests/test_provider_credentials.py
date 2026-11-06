@@ -25,7 +25,7 @@ profile_names() { printf 'claude-code\n'; }
 profile_source() { printf profile; }
 python3() {
   case $1 in
-    tools/provider_connect.py) printf '%s\n' "$CREDENTIAL_ENV" ;;
+    tools/provider_connect.py) [[ $2 == keyless ]] && return 1; printf '%s\n' "$CREDENTIAL_ENV" ;;
     tools/openshell_allow.py) return 0 ;;
     *) return 99 ;;
   esac

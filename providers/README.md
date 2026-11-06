@@ -2,7 +2,7 @@
 
 [Back to the start](../README.md)
 
-A provider profile tells the OpenShell gateway three things about a key: which programs on a desk may use it, which hosts it may be sent to, and how it is sent. A profile's key is set on the server, from a pipe: `<key> | sudo ekka desk connect <profile>` ([Operations](../docs/OPERATIONS.md#connect-a-providers-key)).
+A provider profile tells the OpenShell gateway three things about a key: which programs on a desk may use it, which hosts it may be sent to, and how it is sent. A profile's key is set on the server, from a pipe: `<key> | sudo ekka desk connect <profile>` ([Operations](../docs/OPERATIONS.md#connect-a-providers-key)). A profile that declares `credentials: []` (public hosts such as package registries) has no key: `sudo ekka desk connect <profile> </dev/null` makes its provider, so a desk created with it reaches those hosts with the programs it names. A live desk never gains a program it was not created with, so this is the way a project's public hosts reach a desk.
 
 These are NVIDIA's own profiles from [OpenShell v0.1.3](https://github.com/NVIDIA/OpenShell/tree/v0.1.3/providers), with the changes below, and EKKA's own `bitbucket` (NVIDIA ships none). `PIN.json` records NVIDIA's commit, each file's SHA-256 and every change. Every profile here is loaded on every server; connecting its key is the only step.
 

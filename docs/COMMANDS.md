@@ -55,7 +55,7 @@ claude-code: Claude Code
     used only by /usr/bin/claude, /usr/local/bin/claude
 ```
 
-The key itself is set on the server, from a pipe: `sudo cat /root/anthropic.key | sudo ekka desk connect claude-code`. It is never an argument, so it never shows up in your shell history or the process list. `up.sh connect` takes a profile with one key; one with several, such as `codex`, is refused there.
+The key itself is set on the server, from a pipe: `sudo cat /root/anthropic.key | sudo ekka desk connect claude-code`. It is never an argument, so it never shows up in your shell history or the process list. `up.sh connect` takes a profile with one key; one with several, such as `codex`, is refused there. A profile with `credentials: []` takes none: `sudo ekka desk connect <profile> </dev/null`.
 
 ## Desks
 
