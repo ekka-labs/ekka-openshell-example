@@ -24,6 +24,16 @@ class ImageModes(unittest.TestCase):
             'Bash(' + lines.pop().replace(' <address> <folder>', ' *') + ')',
             'Bash(rm -rf -- /sandbox/ekka-workspace/*)'], 'deny': RM_DENY})
 
+    def test_claude_code_sends_nothing_of_its_own(self):
+        # On a discovery desk auto approval OPENS Claude Code's telemetry host, which changes the wall mid-run and the
+        # run is thrown away DESK_POLICY_CHANGED_DURING_RUN (http-intake.logs.us5.datadoghq.com for claude, measured on
+        # a live box). Every desk's managed settings turn that traffic off.
+        env = json.loads((ROOT / 'external/desk-base/desk/image/managed-settings.json').read_text()).get('env', {})
+        self.assertEqual({k: env.get(k) for k in ('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'DISABLE_TELEMETRY',
+                                                  'DISABLE_ERROR_REPORTING', 'ENABLE_CLAUDEAI_MCP_SERVERS')},
+                         {'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_TELEMETRY': '1',
+                          'DISABLE_ERROR_REPORTING': '1', 'ENABLE_CLAUDEAI_MCP_SERVERS': 'false'})
+
     def test_the_one_clone_runs_unattended_and_an_inline_helper_never_does(self):
         allow = server_allow()
         clone = clone_line('desk-ask', 7).replace('<address> <folder>', 'https://github.com/o/r r')
