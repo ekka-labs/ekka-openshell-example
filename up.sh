@@ -11,6 +11,7 @@
 #   sudo -i, then ekka <command>       this machine's Enclave, as its own user (the installed /usr/local/sbin/ekka);
 #                                      `sudo ./up.sh ekka <command>` is the same call for scripts
 #   <key> | sudo ekka desk connect <provider>  set a provider's key on this machine, read from stdin only
+#   sudo ekka desk connect <provider> </dev/null  a profile with `credentials: []` (public hosts): its provider, no key
 #   (each of the four above is this script's verb, run by the installed ekka wrapper from its root-owned snapshot)
 #   sudo ./up.sh openshell <command>   NVIDIA's openshell CLI as the gateway's administrator, e.g. sudo ./up.sh openshell provider list
 #   sudo ./up.sh walk                  run every documented command against this installation, and check each
@@ -503,8 +504,20 @@ connect_cmd() {  # connect_cmd <provider>: a provider's one key, read from stdin
   local p key secret
   (( $# == 1 )) || die "usage: <key source> | sudo ekka desk connect <provider>   (the key comes on stdin, never as an argument)"
   p=$1
-  [[ -t 0 ]] && die "the key comes from a pipe, never typed at a terminal: <key source> | sudo ekka desk connect <provider>"
   profile_names | grep -qxF -- "$p" || die "that is not a provider this install knows; they are: $(profile_names | tr '\n' ' ')"
+  # A profile that declares no credential at all (`credentials: []`, for example public package registries) makes a
+  # provider with no key, so none is read: a key piped in anyway is refused, as a mistake, and nothing is made. The
+  # provider still exists only because a person ran this, and a desk still reaches its hosts only when the desks grant
+  # lists it and the desk names it (the backend refuses a live desk any program it was not created with).
+  if python3 tools/provider_connect.py keyless "$(profile_source "$p")" </dev/null; then
+    if [[ ! -t 0 ]]; then IFS= read -r -t 1 -d '' secret || true; fi
+    [[ -z ${secret:-} ]] || { secret=; die "$p takes no key; nothing was changed. Run it with nothing on stdin: sudo ekka desk connect $p </dev/null"; }
+    OPENSHELL_WORKSPACE=desks as_gateway_admin connect_keyless "$p" || die "the provider $p was not made; nothing else was changed"
+    ok "$p is connected: it takes no key"
+    ( step_desk_grant ) || die "the provider $p IS made; the desks grant was not refreshed, so a desk naming $p is refused until it is: sudo ./up.sh server $NAME"
+    return 0
+  fi
+  [[ -t 0 ]] && die "the key comes from a pipe, never typed at a terminal: <key source> | sudo ekka desk connect <provider>"
   key=$(python3 tools/provider_connect.py key "$(profile_source "$p")" </dev/null) || exit 1
   IFS= read -r -d '' secret || true
   secret=${secret%$'\n'}
@@ -530,6 +543,13 @@ connect_provider() {  # inside as_gateway_admin: create the provider with its ke
   fi
   python3 tools/openshell_allow.py "$log" "${cmd[@]}" </dev/null || return 1   # the same allow-list and log as E8
   ( export "$key=$secret"; "$OS" -g ekka-agent-desks "${cmd[@]}" </dev/null >/dev/null )
+}
+
+connect_keyless() {  # inside as_gateway_admin: the provider of a profile with no credential, made once, with no key
+  local p=$1 log=$DESKS_STATE/openshell-admin.log
+  "$OS" -g ekka-agent-desks provider get "$p" >/dev/null 2>&1 && return 0   # already made: nothing to replace
+  python3 tools/openshell_allow.py "$log" provider create --name "$p" --type "$p" --global-profile </dev/null || return 1
+  "$OS" -g ekka-agent-desks provider create --name "$p" --type "$p" --global-profile </dev/null >/dev/null
 }
 
 sync_profiles() {  # the gateway's profiles = providers/, or this install's own; imported once and updated after
